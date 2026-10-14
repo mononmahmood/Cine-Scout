@@ -1,25 +1,54 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { CATALOGUE, QUESTIONS, PLATFORMS, MARQUEE_POSTERS, fetchCatalogue } from './data.js';
-import { collectSignals, parseMoodText, rank, marginOf, shouldStop, pickNext, coopLine, buildRecommendations, topForPlatform, loadHistory, saveHistory, loadPrefs, savePrefs, loadRuns, saveRuns } from './engine.js';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CATALOGUE, QUESTIONS, PLATFORMS, fetchCatalogue } from './data.js';
+import { collectSignals, parseMoodText, rank, marginOf, shouldStop, pickNext, coopLine, buildRecommendations, topForPlatform, loadHistory, saveHistory, loadPrefs, savePrefs, loadRuns, saveRuns, recordShown } from './engine.js';
+
+import { loadPosterCache, boostPosters, cachedUrl } from './posterBoost.js';
+import { pullAwardsLive, pullBuzzLive, pullRedditHot, loadLive, saveLive } from './live.js';
 
 const LANGS = ['Hindi', 'English', 'Korean', 'Bengali'];
 
-function Marquee() {
-  const row = [...MARQUEE_POSTERS, ...MARQUEE_POSTERS];
+// Big cinematic reel: a master-film poster drifts in with a slow zoom,
+// glides, fades, and a new random one takes its place. Pool is the full
+// catalogue, order random every cycle.
+// Big cinematic reel: a master-film poster drifts in with a slow zoom,
+// glides, fades, and a new random one takes its place. Pool is the full
+// catalogue, order random every cycle.
+function HeroReel({ pool }) {
+  const [i, setI] = useState(() => Math.floor(Math.random() * pool.length));
+  const [cycle, setCycle] = useState(0);
+  useEffect(() => {
+    if (pool.length < 2) return;
+    const t = setInterval(() => {
+      setI(prev => { let n = prev; while (n === prev) n = Math.floor(Math.random() * pool.length); return n; });
+      setCycle(c => c + 1);
+    }, 6500);
+    return () => clearInterval(t);
+  }, [pool.length]);
+  if (!pool.length) return null;
+  const cur = pool[i % pool.length];
   return (
-    <div className="marquee" aria-hidden="true">
-      <div className="mtrack">{row.map((src, i) => <img key={i} src={src} alt="" loading="lazy" />)}</div>
+    <div className="hero" aria-hidden="true">
+      <div className="hero-bg" key={'b' + cycle} style={{ backgroundImage: `url("${cur.src}")` }} />
+      <div className="hero-frame" key={'f' + cycle}>
+        <img src={cur.src} alt="" draggable="false" />
+      </div>
+      <div className="hero-cap" key={'c' + cycle}>{cur.label}</div>
+      <div className="hero-shade" />
     </div>
   );
 }
 
-function Card({ rec, onLove, onSeen, onReject }) {
+function Poster({ t, src }) {
+  if (src) return <img src={src} alt={t.title} loading="lazy" />;
+  const initials = t.title.split(' ').map(w => w[0]).slice(0, 2).join('');
+  return <div className="poster-fallback"><span>{initials}</span><small>{t.year}</small></div>;
+}
+
+function Card({ rec, src, buzz, onLove, onSeen, onReject }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="card">
-      {rec.title.poster
-        ? <img src={rec.title.poster} alt={rec.title.title} loading="lazy" />
-        : <img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='210'/%3E%3C/svg%3E" />}
+      <Poster t={rec.title} src={src} />
       <div className="row" style={{ marginTop: 9 }}>
         <strong style={{ fontSize: 15 }}>{rec.title.title}</strong>
         <span className="pill match">{rec.pct}%</span>
@@ -27,7 +56,9 @@ function Card({ rec, onLove, onSeen, onReject }) {
       <div className="mut" style={{ fontSize: 12 }}>{rec.title.year} · {rec.title.kind === 'tv' ? 'Series' : 'Film'} · {rec.title.runtime > 300 ? 'series' : rec.title.runtime + ' min'} · IMDb {rec.title.imdb.toFixed(1)}</div>
       <div className="mut" style={{ fontSize: 12.5, marginTop: 6 }}>{rec.why}</div>
       <div className="src">{rec.src}</div>
+      {rec.because && rec.because.length > 0 && <div className="because">Because you picked: {rec.because.join(' · ')}</div>}
       {rec.honors && <div className="honors">{rec.honors}</div>}
+      {buzz && buzz.n >= 0 && <div className="buzzline">Reddit: {buzz.n} mentions in film subs · live</div>}
       <span className={`avail ${rec.blocked ? 'block' : 'ok'}`}>{rec.badge}</span>
       {rec.fallback && <div className="fb">{rec.fallback}</div>}
       <details className="howto" open={open} onToggle={e => setOpen(e.target.open)}>
@@ -105,14 +136,50 @@ export default function App() {
   const [history, setHistory] = useState(() => loadHistory());
   const [prefs, setPrefs] = useState(() => loadPrefs());
   const [showPrefs, setShowPrefs] = useState(() => !loadPrefs());
-  const [showSeen, setShowSeen] = useState(false);
   const [cat, setCat] = useState(CATALOGUE);
   const [pids, setPids] = useState(['prime']);
   const [sort, setSort] = useState('best');
+  const [showSeen, setShowSeen] = useState(false);
   const [runCount, setRunCount] = useState(() => loadRuns());
+  const [art, setArt] = useState(() => loadPosterCache());
+  const [live, setLive] = useState(() => loadLive());
+  const [liveMsg, setLiveMsg] = useState('Pulling live data…');
+  const [hot, setHot] = useState(null);
 
   useEffect(() => { fetchCatalogue().then(setCat); }, []);
   useEffect(() => { saveHistory(history); }, [history]);
+  // Fill missing posters from the visitor's network (cached, silent)
+  useEffect(() => {
+    const missing = cat.filter(t => !t.poster && !cachedUrl(loadPosterCache(), t.id));
+    if (!missing.length) return;
+    boostPosters(missing, () => setArt(loadPosterCache()));
+  }, [cat]);
+  // Live pull on every load: awards (Wikidata) + Reddit buzz (Arctic Shift).
+  // Static values stay as instant display and offline fallback.
+  const refreshLive = async () => {
+    setLiveMsg('Pulling live data…');
+    try {
+      const aw = await pullAwardsLive(cat.map(t => ({ id: t.id, wiki: t.wiki })));
+      setLive(prev => { const n = { ...(prev || {}), awards: aw, buzz: (prev || {}).buzz || {} }; saveLive(n); return n; });
+      setLiveMsg('Awards live · buzz updating…');
+    } catch { setLiveMsg('Live awards unreachable · showing saved'); }
+    try {
+      await pullBuzzLive(cat, (id, r) => {
+        setLive(prev => { const n = { ...(prev || {}), buzz: { ...((prev || {}).buzz || {}), [id]: r } }; saveLive(n); return n; });
+      });
+      setLiveMsg('Live');
+    } catch { setLiveMsg('Live (partial)'); }
+  };
+  useEffect(() => { refreshLive(); }, []); // eslint-disable-line
+  useEffect(() => {
+    if (route === 'plat' || route.startsWith('plat')) {
+      pullRedditHot(cat).then(setHot).catch(() => {});
+    }
+  }, [route]); // eslint-disable-line
+  const imgOf = t => t.poster || cachedUrl(art, t.id);
+  const pool = useMemo(() => cat
+    .map(t => ({ src: t.poster || cachedUrl(art, t.id), label: `${t.title} (${t.year})` }))
+    .filter(p => p.src), [cat, art]);
 
   const { tags, sig } = useMemo(() => collectSignals(asked, answers, freeTags), [asked, answers, freeTags]);
 
@@ -123,11 +190,16 @@ export default function App() {
     return pickNext(QUESTIONS, asked, tags, sig);
   }, [asked, tags, sig, done, cat, history, prefs, runCount]);
 
+  const recorded = useRef(false);
   useEffect(() => { if (!current && asked.length >= 2 && !done && !thinking) { setDone(true); const n = runCount + 1; setRunCount(n); saveRuns(n); } }, [current, asked, done, thinking]); // eslint-disable-line
 
-  const recs = useMemo(() => done ? buildRecommendations(cat, tags, sig, region, history, prefs, runCount) : [], [done, cat, tags, sig, region, history, prefs, runCount]);
-  const plat = useMemo(() => route.startsWith('plat') ? topForPlatform(cat, pids, sort, region, history) : [], [route, cat, pids, sort, region, history]);
+  const res = useMemo(() => done ? buildRecommendations(cat, tags, sig, region, history, prefs, runCount, live, asked, answers, freeText) : { recs: [], trace: null }, [done, cat, tags, sig, region, history, prefs, runCount, live, asked, answers, freeText]);
+  const recs = res.recs || [];
+  const plat = useMemo(() => route.startsWith('plat') ? topForPlatform(cat, pids, sort, region, history, live) : [], [route, cat, pids, sort, region, history, live]);
   const line = useMemo(() => coopLine(asked, answers), [asked, answers]);
+  useEffect(() => {
+    if (done && recs.length && !recorded.current) { recorded.current = true; recordShown(recs.map(r => r.id)); }
+  }, [done, recs.length]); // eslint-disable-line
 
   const answer = (q, o) => {
     setThinking(true);
@@ -141,15 +213,14 @@ export default function App() {
     }, 500);
   };
   const applyFree = () => { if (freeText.trim()) setFreeTags(parseMoodText(freeText)); };
-  const reset = () => { setAsked([]); setAnswers({}); setFreeText(''); setFreeTags(new Set()); setDone(false); };
+  const reset = () => { recorded.current = false; setAsked([]); setAnswers({}); setFreeText(''); setFreeTags(new Set()); setDone(false); };
   const mark = id => setHistory(new Set([...history, id]));
   const tpid = id => setPids(pids.includes(id) ? pids.filter(x => x !== id) : [...pids, id]);
 
   return (
     <div className="app">
-      <Marquee />
       <aside className="side">
-        <h1 className="logo">CINE <span className="scout">SCOUT</span></h1>
+        <h1 className="logo">CINE<br /><span className="scout">SCOUT</span></h1>
         <div className="tag">for cinephiles · art to mainstream</div>
         <div className="sec">Diagnose</div>
         <div className="nav"><button className={route === 'mind' ? 'on' : ''} onClick={() => setRoute('mind')}>Mind-Reader</button></div>
@@ -165,9 +236,10 @@ export default function App() {
       </aside>
       <main className="main">
         <div className="topbar">
-          <div className="mut" style={{ fontSize: 12 }}>Verified for <b style={{ color: '#fff' }}>{region}</b></div>
+          <div className="mut" style={{ fontSize: 12 }}>Verified for <b style={{ color: '#fff' }}>{region}</b> · <span className="livedot" />{liveMsg} <button className="linkbtn" onClick={refreshLive}>Refresh</button></div>
           <div className="seg">{['IN', 'BD'].map(r => <button key={r} className={region === r ? 'on' : ''} onClick={() => { setRegion(r); reset(); }}>{r === 'IN' ? 'India' : 'Bangladesh'}</button>)}</div>
         </div>
+        <HeroReel pool={pool} />
 
         {showPrefs ? (
           <div style={{ marginTop: 18 }}><Onboard initial={prefs} onDone={p => { setPrefs(p); savePrefs(p); setShowPrefs(false); }} /></div>
@@ -185,11 +257,22 @@ export default function App() {
               <button onClick={applyFree}>Read this</button>
             </div>
             {freeTags.size > 0 && <div className="mut" style={{ fontSize: 12, marginTop: 6 }}>Heard: {[...freeTags].filter(x => !x.startsWith('__')).join(', ')}</div>}
-            <div className="dots">{[0, 1, 2, 3, 4, 5].map(i => <i key={i} className={asked.length > i ? 'on' : ''} />)}</div>
+            <div className="dots">{[0, 1, 2, 3, 4, 5, 6, 7].map(i => <i key={i} className={asked.length > i ? 'on' : ''} />)}</div>
             {done ? (
               <>
                 <h3 style={{ marginTop: 16 }}>10 for tonight — checked for {region}</h3>
-                <div className="grid">{recs.map(r => <Card key={r.id} rec={r} onLove={() => mark(r.id)} onSeen={() => mark(r.id)} onReject={() => mark(r.id)} />)}</div>
+                {res.trace && (
+                  <details className="howto">
+                    <summary>How it thought</summary>
+                    <ol className="steps">
+                      <li>Read {res.trace.agreed} answers → signals: {res.trace.signals.join(', ') || 'open mood'}</li>
+                      <li>Compared {res.trace.considered} titles, skipped {res.trace.excludedSeen} already seen</li>
+                      <li>Shortlisted {res.trace.shortlisted}, re-scored for agreement across your answers</li>
+                      {res.trace.blocked > 0 && <li>{res.trace.blocked} strong match{res.trace.blocked > 1 ? 'es' : ''} not streaming in {region} — kept below with rent or alternative paths</li>}
+                    </ol>
+                  </details>
+                )}
+                <div className="grid">{recs.map(r => <Card key={r.id} rec={r} src={imgOf(r.title)} buzz={live?.buzz?.[r.id]} onLove={() => mark(r.id)} onSeen={() => mark(r.id)} onReject={() => mark(r.id)} />)}</div>
                 <div className="mini" style={{ marginTop: 14 }}><button onClick={reset}>New session — different mood</button></div>
               </>
             ) : thinking ? (
@@ -198,7 +281,7 @@ export default function App() {
               <div className="q" style={{ marginTop: 16 }} key={current.id + asked.length}>
                 <strong style={{ fontSize: 17 }}>{current.prompt}</strong>
                 {current.options.map(o => <button key={o.id} className="opt" onClick={() => answer(current, o)}>{o.label}</button>)}
-                <div className="mut" style={{ fontSize: 11, marginTop: 10 }}>Question {asked.length + 1} · order shifts every run · stops when sure (max 6)</div>
+                <div className="mut" style={{ fontSize: 11, marginTop: 10 }}>Question {asked.length + 1} · order shifts every run · stops when sure (max 8)</div>
               </div>
             ) : <p className="mut">Reading you…</p>}
           </>
@@ -206,6 +289,21 @@ export default function App() {
           <>
             <h2 style={{ margin: '16px 0 2px' }}>Best by platform</h2>
             <div className="mut" style={{ fontSize: 13 }}>Deep cuts included. Switch services on or off.</div>
+            {hot && hot.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <div className="mut" style={{ fontSize: 12, marginBottom: 6 }}>Hot on Reddit right now · live</div>
+                <div className="hotrow">
+                  {hot.map(h => {
+                    const t = cat.find(x => x.id === h.id);
+                    if (!t) return null;
+                    const inner = (<><img src={imgOf(t)} alt={t.title} loading="lazy" /><span>{t.title}</span><small>r/{h.sub} · {h.score + h.comments}</small></>);
+                    return h.url
+                      ? <a key={h.id} className="hotcard" href={h.url} target="_blank" rel="noreferrer">{inner}</a>
+                      : <div key={h.id} className="hotcard">{inner}</div>;
+                  })}
+                </div>
+              </div>
+            )}
             <div className="chips">{PLATFORMS.map(p => <button key={p.id} className={`chip ${pids.includes(p.id) ? 'on' : ''}`} onClick={() => tpid(p.id)}>{p.name}</button>)}</div>
             <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
               <span className="mut" style={{ fontSize: 12 }}>Sort:</span>
@@ -216,7 +314,7 @@ export default function App() {
                 <option value="gems">Deep cuts first</option>
               </select>
             </div>
-            <div className="grid">{plat.map(r => <Card key={r.id} rec={r} onLove={() => mark(r.id)} onSeen={() => mark(r.id)} onReject={() => mark(r.id)} />)}</div>
+            <div className="grid">{plat.map(r => <Card key={r.id} rec={r} src={imgOf(r.title)} buzz={live?.buzz?.[r.id]} onLove={() => mark(r.id)} onSeen={() => mark(r.id)} onReject={() => mark(r.id)} />)}</div>
             {plat.length === 0 && <p className="mut">Turn on at least one platform.</p>}
           </>
         )}

@@ -1,4 +1,4 @@
-// Matinee thinker: mood fit + multi-source quality + freshness + personal taste. Always 10.
+// Cine Scout thinker: mood fit + multi-source quality + freshness + personal taste. Always 10.
 import { verify } from './data.js';
 
 export function collectSignals(asked, answers, freeTags) {
@@ -45,11 +45,12 @@ function quality(t, sig) {
 
 function overexposed(t) { return t.imdb >= 8.7 && t.buzz >= 88; }
 
-export function scoreTitle(t, tags, sig, prefs, runCount) {
+export function scoreTitle(t, tags, sig, prefs, runCount, shown) {
   const eff = new Set([...tags].filter(x => !x.startsWith('__')));
   const hit = t.tags.filter(x => eff.has(x)).length;
   const mood = eff.size === 0 ? 0.5 : hit / Math.max(t.tags.length, 1);
-  let s = mood * 0.55 + quality(t, sig) * 0.35;
+  let s = mood * 0.65 + quality(t, sig) * 0.28;
+  if (shown && shown[t.id]) s -= Math.min(0.25, 0.06 * shown[t.id]); // seen-but-ignored sinks
   // anti-gimmick: famous legends step aside unless asked for safe legends or explicitly loved
   const lovedFamous = prefs?.lovedTags?.some(x => t.title.toLowerCase().includes(x));
   if (overexposed(t) && !sig.safeOnly && !lovedFamous) s -= 0.14;
@@ -57,6 +58,7 @@ export function scoreTitle(t, tags, sig, prefs, runCount) {
   if ((sig.gemBoost || sig.freshBoost || (runCount || 0) >= 1) && t.gem && t.buzz < 75) s += 0.10;
   if (sig.safeOnly && (t.imdb < 8.3 || t.buzz < 78) && !t.gem) s -= 0.2;
   if (sig.gemBoost && t.gem) s += 0.06;
+  if ((sig.safeOnly || sig.arthouse === 2 || sig.brain === 2) && t.awards?.length) s += 0.04; // acclaimed records
   // arthouse appetite
   if (sig.arthouse === 2 && t.tags.includes('art-house')) s += 0.10;
   if (sig.arthouse === -1 && t.tags.includes('art-house')) s -= 0.18;
@@ -74,7 +76,6 @@ export function scoreTitle(t, tags, sig, prefs, runCount) {
   if (sig.thrill === 2 && !(t.tags.includes('adrenaline') || t.tags.includes('crime-world') || t.tags.includes('twist'))) s -= 0.15;
   if (sig.laugh >= 2 && !(t.tags.includes('light-comedy') || t.tags.includes('dark-comedy'))) s -= 0.2;
   if (sig.love >= 2 && !(t.tags.includes('emotional') || t.tags.includes('romance-light') || t.tags.includes('hopeful'))) s -= 0.15;
-  if ((sig.safeOnly || sig.arthouse === 2 || sig.brain === 2) && t.awards?.length) s += 0.04; // acclaimed records
   return s;
 }
 
@@ -93,15 +94,16 @@ export function applyHardFilters(cat, sig, prefs) {
   });
 }
 
-export function rank(catalogue, tags, sig = {}, prefs = null, runCount = 0) {
-  return [...catalogue].map(t => ({ t, s: scoreTitle(t, tags, sig, prefs, runCount) })).sort((a, b) => b.s - a.s);
+export function rank(catalogue, tags, sig = {}, prefs = null, runCount = 0, shown = null) {
+  return [...catalogue].map(t => ({ t, s: scoreTitle(t, tags, sig, prefs, runCount, shown) })).sort((a, b) => b.s - a.s);
 }
 export function marginOf(r) { return r.length < 2 ? 0 : r[0].s - r[1].s; }
 
 export function shouldStop(n, margin) {
-  if (n >= 6) return true;
+  if (n >= 8) return true;
   if (n >= 2 && margin > 0.22) return true;
   if (n >= 4 && margin > 0.10) return true;
+  if (n >= 6 && margin > 0.06) return true;
   return false;
 }
 
@@ -132,27 +134,93 @@ function diversify(ranked, limit = 10) {
   const keyOf = t => t.tags.includes('art-house') || t.tags.includes('slow-cinema') ? 'arthouse' : t.tags.includes('light-comedy') ? 'comedy' : t.tags.includes('crime-world') || t.tags.includes('adrenaline') ? 'thrill' : t.tags.includes('sci-escape') ? 'scifi' : 'drama';
   for (const r of ranked) {
     const k = keyOf(r.t);
-    if ((cluster[k] || 0) >= 3) continue;
+    if ((cluster[k] || 0) >= 2) continue;
     cluster[k] = (cluster[k] || 0) + 1; out.push(r);
     if (out.length >= limit) break;
   }
+  // fill to limit even if clusters exhausted (always 10)
+  for (const r of ranked) { if (out.length >= limit) break; if (!out.includes(r)) out.push(r); }
   return out;
 }
 
-export function buildRecommendations(catalogue, tags, sig, region, history, prefs, runCount = 0) {
-  const pool = applyHardFilters(catalogue, sig, prefs).filter(t => !history.has(t.id));
-  const base = pool.length >= 10 ? pool : catalogue.filter(t => !history.has(t.id));
-  const ranked = diversify(rank(base.length ? base : catalogue, tags, sig, prefs, runCount), 10);
+// Shown-memory: titles shown but ignored sink a little more every run.
+// Stronger than history alone — kills across-run repeats.
+const SKEY = 'cinescout.shown.v1';
+export function loadShown() { try { return JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch { return {}; } }
+export function recordShown(ids) {
+  try {
+    const m = loadShown();
+    ids.forEach(id => { m[id] = (m[id] || 0) + 1; });
+    localStorage.setItem(SKEY, JSON.stringify(m));
+  } catch {}
+}
+
+function withLive(catalogue, live) {
+  if (!live) return catalogue;
+  return catalogue.map(t => {
+    const b = live.buzz && live.buzz[t.id];
+    const a = live.awards && live.awards.byId && live.awards.byId[t.id];
+    let buzz = t.buzz;
+    if (b && b.n > 0) buzz = Math.min(97, Math.max(t.buzz, 55 + b.n * 5));
+    return { ...t, buzz, awards: a !== undefined ? a : (t.awards || []) };
+  });
+}
+
+export function buildRecommendations(catalogue, tags, sig, region, history, prefs, runCount = 0, live = null, asked = [], answers = {}, freeText = '') {
+  catalogue = withLive(catalogue, live);
+  const shown = loadShown();
+  // Stage 0: hard filters + seen exclusion (counted for the trace)
+  const prePool = applyHardFilters(catalogue, sig, prefs);
+  const unseen = prePool.filter(t => !history.has(t.id));
+  const base = unseen.length >= 10 ? unseen : catalogue.filter(t => !history.has(t.id));
+  const pool = base.length ? base : catalogue;
+  // Stage 1: broad rank, keep 30
+  const stage1 = rank(pool, tags, sig, prefs, runCount, shown).slice(0, 30);
+  // Stage 2: deliberate rescore — agreement across answers + jitter + full context
+  const rescored = stage1.map(({ t, s }) => {
+    let agree = 0;
+    for (const q of asked || []) {
+      const o = q.options.find(x => x.id === (answers || {})[q.id]);
+      if (o && (o.tags || []).some(tag => t.tags.includes(tag))) agree++;
+    }
+    return { t, s: s + Math.min(0.06, agree * 0.02) + (Math.random() - 0.5) * 0.05 };
+  }).sort((a, b) => b.s - a.s);
+  const ranked = diversify(rescored, 10);
   const recs = ranked.map(({ t, s }) => {
     const v = verify(t, region);
-    const pct = Math.min(99, Math.max(62, Math.round(72 + s * 42) - (v.blocked ? 14 : 0)));
+    const pct = Math.min(99, Math.max(58, Math.round(64 + s * 42) - (v.blocked ? 14 : 0)));
     const eff = [...tags].filter(x => !x.startsWith('__'));
     const overlap = t.tags.filter(x => eff.includes(x)).slice(0, 3).join(', ') || 'tonight’s energy';
     const src = `IMDb ${t.imdb.toFixed(1)} · Critics ${t.critic} · Buzz ${t.buzz}${t.gem ? ' · Deep cut' : ''}`;
-    return { ...v, id: t.id, title: t, pct, src, honors: (t.awards || []).join(' · '), why: `Fits ${overlap}. ${t.overview} ${srcLine(t, sig)}` };
+    return { ...v, id: t.id, title: t, pct, src, honors: (t.awards || []).join(' · '), because: becauseOf(t, asked, answers, freeText), why: `Fits ${overlap}. ${t.overview} ${srcLine(t, sig)}` };
   });
-  return recs.sort((a, b) => (a.blocked - b.blocked) || (b.pct - a.pct)).slice(0, 10);
+  const sorted = recs.sort((a, b) => (a.blocked - b.blocked) || (b.pct - a.pct));
+  const final = sorted.slice(0, 10);
+  const eff = [...tags].filter(x => !x.startsWith('__'));
+  const trace = {
+    considered: prePool.length,
+    excludedSeen: prePool.length - unseen.length,
+    shortlisted: stage1.length,
+    blocked: final.filter(r => r.isBlockedInRegion).length,
+    signals: [...eff].slice(0, 5),
+    agreed: asked ? asked.length : 0,
+  };
+  return { recs: final, trace };
 }
+function becauseOf(t, asked, answers, freeText) {
+  const notes = [];
+  for (const q of asked || []) {
+    const o = q.options.find(x => x.id === (answers || {})[q.id]);
+    if (o && (o.tags || []).some(tag => t.tags.includes(tag))) {
+      const short = String(o.label).replace(/^[A-C]\)\s*/, '').slice(0, 60);
+      if (!notes.includes(short)) notes.push(short);
+    }
+    if (notes.length === 2) break;
+  }
+  if (notes.length < 2 && freeText && freeText.trim()) notes.push(`your words: “${freeText.trim().slice(0, 60)}”`);
+  return notes;
+}
+
 function srcLine(t, sig) {
   if (sig.brain === 0) return 'Easy watch, no homework.';
   if (sig.brain === 2) return 'Demands attention — pays off.';
@@ -161,10 +229,12 @@ function srcLine(t, sig) {
   return 'Cross-checked on IMDb, critics and buzz.';
 }
 
-export function topForPlatform(catalogue, pids, sort, region, history) {
-  let list = catalogue.filter(t => t.imdb >= 7.8 && t.avail.some(a => pids.includes(a.p)));
+export function topForPlatform(catalogue, pids, sort, region, history, live = null) {
+  catalogue = withLive(catalogue, live);
+  let list = catalogue.filter(t => t.imdb >= 7.5 && t.avail.some(a => pids.includes(a.p)));
   list = list.filter(t => !history.has(t.id));
-  const key = sort === 'buzz' ? (t => t.buzz) : sort === 'critics' ? (t => t.critic) : sort === 'gems' ? (t => (t.gem ? 1000 : 0) + t.imdb * 10) : (t => t.imdb * 10 + t.critic / 10 + t.buzz / 20 + (t.gem ? 6 : 0) - (overexposed(t) ? 8 : 0));
+  const shown = loadShown();
+  const key = sort === 'buzz' ? (t => t.buzz - (shown[t.id] || 0) * 3) : sort === 'critics' ? (t => t.critic - (shown[t.id] || 0) * 3) : sort === 'gems' ? (t => (t.gem ? 1000 : 0) + t.imdb * 10 - (shown[t.id] || 0) * 5) : (t => t.imdb * 10 + t.critic / 10 + t.buzz / 20 + (t.gem ? 6 : 0) - (overexposed(t) ? 8 : 0) - (shown[t.id] || 0) * 4);
   return [...list].sort((a, b) => key(b) - key(a)).slice(0, 18).map(t => {
     const v = verify(t, region);
     return { ...v, id: t.id, title: t, pct: Math.min(99, Math.round(t.imdb * 10) + (t.gem ? 3 : 0)), src: `IMDb ${t.imdb.toFixed(1)} · Critics ${t.critic} · Buzz ${t.buzz}${t.gem ? ' · Deep cut' : ''}`, honors: (t.awards || []).join(' · '), why: `${t.gem ? 'Deep cut most subscribers miss' : 'Top-rated'} on ${pids.join(', ')}. ${t.overview}` };

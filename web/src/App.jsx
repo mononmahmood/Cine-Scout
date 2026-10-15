@@ -10,29 +10,39 @@ const LANGS = ['Hindi', 'English', 'Korean', 'Bengali'];
 // Big cinematic reel: a master-film poster drifts in with a slow zoom,
 // glides, fades, and a new random one takes its place. Pool is the full
 // catalogue, order random every cycle.
-// Big cinematic reel: a master-film poster drifts in with a slow zoom,
-// glides, fades, and a new random one takes its place. Pool is the full
-// catalogue, order random every cycle.
-function HeroReel({ pool }) {
-  const [i, setI] = useState(() => Math.floor(Math.random() * pool.length));
-  const [cycle, setCycle] = useState(0);
+// Full-bleed backdrop: a blurred, slightly zoomed poster drifts from one
+// side to the other, crossfades, and a new random one takes over. Covers
+// the whole question page; content floats above it.
+function HeroReel({ pool, artPool }) {
+  const anyPool = pool.length ? pool : [];
+  const draw = (avoidSrc) => {
+    let list = (artPool.length && Math.random() < 0.45) ? artPool : anyPool;
+    if (!list.length) list = anyPool;
+    if (!list.length) return null;
+    let p = list[Math.floor(Math.random() * list.length)];
+    let guard = 0;
+    while (p.src === avoidSrc && guard++ < 10) p = list[Math.floor(Math.random() * list.length)];
+    return p;
+  };
+  const [a, setA] = useState(null);
+  const [b, setB] = useState(null);
+  const [showB, setShowB] = useState(false);
   useEffect(() => {
-    if (pool.length < 2) return;
+    if (!anyPool.length) return;
+    if (!a) { setA(draw(null)); return; }
+    if (!b) { setB(draw(a.src)); return; }
     const t = setInterval(() => {
-      setI(prev => { let n = prev; while (n === prev) n = Math.floor(Math.random() * pool.length); return n; });
-      setCycle(c => c + 1);
-    }, 6500);
+      if (!showB) setB(draw(a.src)); else setA(draw(b.src));
+      setShowB(s => !s);
+    }, 7000);
     return () => clearInterval(t);
-  }, [pool.length]);
-  if (!pool.length) return null;
-  const cur = pool[i % pool.length];
+  }, [anyPool.length, a, b, showB]); // eslint-disable-line
+  if (!a || !b) return null;
+  if (!a || !b) return null;
   return (
     <div className="hero" aria-hidden="true">
-      <div className="hero-bg" key={'b' + cycle} style={{ backgroundImage: `url("${cur.src}")` }} />
-      <div className="hero-frame" key={'f' + cycle}>
-        <img src={cur.src} alt="" draggable="false" />
-      </div>
-      <div className="hero-cap" key={'c' + cycle}>{cur.label}</div>
+      <div className="hero-layer" key={'a' + a.src} style={{ backgroundImage: `url("${a.src}")`, opacity: showB ? 0 : 1 }} />
+      <div className="hero-layer" key={'b' + b.src} style={{ backgroundImage: `url("${b.src}")`, opacity: showB ? 1 : 0 }} />
       <div className="hero-shade" />
     </div>
   );
@@ -154,9 +164,9 @@ export default function App() {
     if (!missing.length) return;
     boostPosters(missing, () => setArt(loadPosterCache()));
   }, [cat]);
-  // Live pull on every load: awards (Wikidata) + Reddit buzz (Arctic Shift).
-  // Static values stay as instant display and offline fallback.
-  const refreshLive = async () => {
+  // Live pull on every load: awards for all (fast) + buzz for the titles
+  // most likely to surface. Full buzz refresh on demand + per-result top-up.
+  const refreshLive = async (full = false) => {
     setLiveMsg('Pulling live data…');
     try {
       const aw = await pullAwardsLive(cat.map(t => ({ id: t.id, wiki: t.wiki })));
@@ -164,13 +174,22 @@ export default function App() {
       setLiveMsg('Awards live · buzz updating…');
     } catch { setLiveMsg('Live awards unreachable · showing saved'); }
     try {
-      await pullBuzzLive(cat, (id, r) => {
+      const entries = full ? cat : [...cat].sort((a, b) => b.buzz - a.buzz).slice(0, 30);
+      await pullBuzzLive(entries, (id, r) => {
         setLive(prev => { const n = { ...(prev || {}), buzz: { ...((prev || {}).buzz || {}), [id]: r } }; saveLive(n); return n; });
       });
-      setLiveMsg('Live');
+      setLiveMsg(full ? 'Live' : 'Live · deeper buzz on Refresh');
     } catch { setLiveMsg('Live (partial)'); }
   };
-  useEffect(() => { refreshLive(); }, []); // eslint-disable-line
+  useEffect(() => { refreshLive(false); }, []); // eslint-disable-line
+  // Top-up buzz for exactly the 10 shown results
+  useEffect(() => {
+    if (!done || !recs.length) return;
+    const missing = recs.map(r => r.title).filter(t => !(loadLive()?.buzz || {})[t.id]);
+    if (missing.length) pullBuzzLive(missing, (id, r) => {
+      setLive(prev => { const n = { ...(prev || {}), buzz: { ...((prev || {}).buzz || {}), [id]: r } }; saveLive(n); return n; });
+    }).catch(() => {});
+  }, [done]); // eslint-disable-line
   useEffect(() => {
     if (route === 'plat' || route.startsWith('plat')) {
       pullRedditHot(cat).then(setHot).catch(() => {});
@@ -178,8 +197,9 @@ export default function App() {
   }, [route]); // eslint-disable-line
   const imgOf = t => t.poster || cachedUrl(art, t.id);
   const pool = useMemo(() => cat
-    .map(t => ({ src: t.poster || cachedUrl(art, t.id), label: `${t.title} (${t.year})` }))
+    .map(t => ({ src: t.poster || cachedUrl(art, t.id), art: t.gem || t.tags.includes('art-house') || t.tags.includes('slow-cinema') || t.tags.includes('world-cinema') }))
     .filter(p => p.src), [cat, art]);
+  const artPool = useMemo(() => pool.filter(p => p.art), [pool]);
 
   const { tags, sig } = useMemo(() => collectSignals(asked, answers, freeTags), [asked, answers, freeTags]);
 
@@ -235,11 +255,12 @@ export default function App() {
         <div className="mut" style={{ fontSize: 11, margin: '14px 8px' }}>{history.size === 0 ? 'No history yet.' : `Remembers ${history.size} — never repeats.`} <button style={{ background: 'none', border: 0, color: '#71717a', cursor: 'pointer', padding: 0 }} onClick={() => setHistory(new Set())}>reset</button></div>
       </aside>
       <main className="main">
+        <HeroReel pool={pool} artPool={artPool} />
+        <div className="mcontent">
         <div className="topbar">
-          <div className="mut" style={{ fontSize: 12 }}>Verified for <b style={{ color: '#fff' }}>{region}</b> · <span className="livedot" />{liveMsg} <button className="linkbtn" onClick={refreshLive}>Refresh</button></div>
+          <div className="mut" style={{ fontSize: 12 }}>Verified for <b style={{ color: '#fff' }}>{region}</b> · <span className="livedot" />{liveMsg} <button className="linkbtn" onClick={() => refreshLive(true)}>Refresh</button></div>
           <div className="seg">{['IN', 'BD'].map(r => <button key={r} className={region === r ? 'on' : ''} onClick={() => { setRegion(r); reset(); }}>{r === 'IN' ? 'India' : 'Bangladesh'}</button>)}</div>
         </div>
-        <HeroReel pool={pool} />
 
         {showPrefs ? (
           <div style={{ marginTop: 18 }}><Onboard initial={prefs} onDone={p => { setPrefs(p); savePrefs(p); setShowPrefs(false); }} /></div>
@@ -318,6 +339,7 @@ export default function App() {
             {plat.length === 0 && <p className="mut">Turn on at least one platform.</p>}
           </>
         )}
+        </div>
       </main>
     </div>
   );

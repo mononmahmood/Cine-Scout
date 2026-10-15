@@ -57,23 +57,9 @@ async function resolveOne(t) {
 }
 
 export async function boostPosters(titles, onUpdate) {
-  const cache = loadPosterCache();
-  const now = Date.now();
-  const todo = titles.filter(t => {
-    const hit = cache[t.id];
-    if (!hit) return true;
-    return hit.u ? (now - hit.at > HIT_TTL) : (now - hit.at > MISS_TTL);
-  });
-  const POOL = 5;
-  for (let k = 0; k < todo.length; k += POOL) {
-    await Promise.all(todo.slice(k, k + POOL).map(async t => {
-      const url = await resolveOne(t);
-      const fresh = loadPosterCache();
-      fresh[t.id] = url ? { u: url, at: now } : { u: null, at: now };
-      save(fresh);
-      onUpdate && onUpdate(t.id, url);
-    }));
-  }
+  // Disabled: the artwork service blocks cross-origin browser calls, so this
+  // can never succeed in production. Posters ship verified in the catalogue.
+  return;
 }
 
 export function cachedUrl(cache, id) {

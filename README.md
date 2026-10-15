@@ -1,15 +1,41 @@
-# Musepark 1.3 — macOS Mind-Reader + Platform Explorer
+# Cine Scout
 
-Native SwiftUI app. Dark mode `#0F0F0F`, sidebar (Mind-Reader / Netflix / Prime / Apple TV+), match-% + IN/BD availability badges.
+A minimal, dark-mode movie and TV companion for cinephiles. A Mind-Reader
+diagnoses your mood through short situational questions and returns 10
+must-watch picks with match percentages — every result verified for streaming
+in India and Bangladesh, with exact watch steps. A Platform Explorer tracks
+the best films on Netflix, Prime Video, Apple TV+, JioHotstar, and Sony LIV.
 
-## Run
-1. Open folder in Xcode 15+ (macOS 14 SDK) — or `swift build` / `swift run` (SwiftUI SDK present via Command Line Tools).
-2. Copy `.env.example` values to env: `TMDB_API_KEY=...` (mock catalogue used until key set; JustWatch verifier is mocked — swap `JustWatchService` for real API).
-3. Region toggle IN/BD in toolbar. History persists to `~/Library/Application Support/Musepark/history.json` + UserDefaults.
+## Live data, every load
 
-## Spec coverage
-- **Mind-Reader:** situational proxy Qs (diner / complexity / space / tempo), dynamic Akinator loop (`Engine.swift`: ask-one → recalc → margin check → stop early at 2-4 Qs).
-- **Match %:** mood-tag overlap + IMDb/critic prior, 62–99.
-- **Anti-repetition:** `HistoryTracker` excludes seen/rejected; reset via ⌘⇧R.
-- **Platform Explorer:** bypasses questions, IMDb 8.0+, hidden gems first.
-- **Strict IN/BD:** `JustWatchService.verify` — glowing badge `Available on X [IN/BD]`; blocked → red badge + rent/buy fallback or closest-alternative note.
+- **Reddit buzz** — fresh mention counts from r/movies, r/TrueFilm,
+  r/criterion, r/television, and r/bollywood, plus a live
+  "Hot on Reddit now" shelf.
+- **Awards** — pulled live from Wikidata on every visit.
+- Ratings blend IMDb, critics, subscriber buzz, and live Reddit heat.
+
+Static catalogue values remain as instant display and offline fallback.
+
+## Run it
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173/`. Or double-click `Start Cine Scout.command`.
+
+## Smoke test
+
+```bash
+./web/smoke.sh
+```
+
+Builds, serves, and headless-checks the app for startup errors.
+
+## Layout
+
+- `web/` — the app (Vite + React)
+- `Sources/` — original native macOS SwiftUI shell
+- `Start Cine Scout.command` — one-click starter

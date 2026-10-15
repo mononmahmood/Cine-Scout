@@ -158,6 +158,26 @@ function curate(claims, labels) {
   return out;
 }
 
+// Review scores on Wikidata (P444), keyed by who published them (P447).
+const CRITIC_SRC = { Q105584: 'rt', Q150248: 'mc' };
+function reviewsOf(claims) {
+  const out = {};
+  for (const v of claims.P444 || []) {
+    try {
+      const k = CRITIC_SRC[v.qualifiers?.P447?.[0]?.datavalue?.value?.id];
+      if (!k) continue;
+      // Rotten Tomatoes also files audience/average scores; keep the Tomatometer only
+      const method = v.qualifiers?.P459?.[0]?.datavalue?.value?.id;
+      if (k === 'rt' && method && method !== 'Q108403393') continue;
+      const m = String(v.mainsnak.datavalue.value).match(/([\d.]+)\s*(%|\/\s*(\d+))/);
+      if (!m) continue;
+      const den = m[3] ? +m[3] : 100;
+      out[k] = Math.round(parseFloat(m[1]) / den * 100); // later claims are newer
+    } catch {}
+  }
+  return out;
+}
+
 export async function pullAwardsLive(entries) {
   // entries: [{id, wiki}] — chunked so URLs stay small at 140 titles
   const arts = entries.map(e => e.wiki).filter(Boolean);
@@ -187,12 +207,12 @@ export async function pullAwardsLive(entries) {
       try { labels[q] = e.labels.en.value; } catch {}
     }
   }
-  const byId = {};
+  const byId = {}, reviews = {};
   for (const e of entries) {
     const q = artToQ[e.wiki];
-    if (q && byQ[q]) byId[e.id] = curate(byQ[q], labels);
+    if (q && byQ[q]) { byId[e.id] = curate(byQ[q], labels); reviews[e.id] = reviewsOf(byQ[q]); }
   }
-  return { byId, at: Date.now() };
+  return { byId, reviews, at: Date.now() };
 }
 
 function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ''); }
@@ -226,7 +246,7 @@ async function pullBuzzOne(t) {
 export async function pullBuzzLive(entries, onOne) {
   // Progressive: concurrency 4, calls onOne(id, {n, sample, at}) as each lands
   const queue = entries.filter(e => SUBS[e.id]);
-  const POOL = 4;
+  const POOL = 2; // the archive rate-limits hard; errors come back without CORS headers
   for (let k = 0; k < queue.length; k += POOL) {
     await Promise.all(queue.slice(k, k + POOL).map(async t => {
       try {

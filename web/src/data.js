@@ -163,7 +163,7 @@ export const QUESTIONS = [
   { id: 'battery', cat: 'energy', prompt: 'How tired is your brain right now?', follow: { full: 'Sharp it is — I can go deep.', half: 'Half battery — feeling with ease.', empty: 'Empty — keeping it effortless.' }, options: [
     { id: 'full', label: 'Sharp — I can handle something demanding', tags: ['psych-fracture','twist','lore','art-house'], signal: { brain: 2 } },
     { id: 'half', label: 'Half — moving but easy to follow', tags: ['emotional','moral-ambiguity'], signal: { brain: 1 } },
-    { id: 'empty', label: 'Drained — keep it light tonight', tags: ['light-comedy','feel-good'], signal: { brain: 0, laugh: 2 } },
+    { id: 'empty', label: 'Drained — keep it light tonight', tags: ['light-comedy','feel-good','hopeful'], signal: { brain: 0 } },
   ]},
   { id: 'hit', cat: 'heart', prompt: 'What should land hardest?', follow: { mind: 'Mind-bender it is.', heart: 'Going for the heart.', laugh: 'Laughs coming up.' }, options: [
     { id: 'mind', label: 'A twist that rearranges everything', tags: ['twist','psych-fracture'], signal: { brain: 2, thrill: 1 } },
@@ -205,10 +205,10 @@ export const QUESTIONS = [
     { id: 'wide', label: 'Landscapes, journeys', tags: ['expansive'], signal: {} },
     { id: 'neon', label: 'Dreamlike and strange', tags: ['neon','surreal','sci-escape'], signal: {} },
   ]},
-  { id: 'time', cat: 'context', prompt: 'How much time do you have?', follow: { short: 'Under two hours.', night: 'Full night free.', binge: 'Series is fine.' }, options: [
-    { id: 'short', label: 'Under 2 hours, film only', tags: [], signal: { maxRuntime: 125, noSeries: true } },
-    { id: 'night', label: 'A full evening — epic is fine', tags: [], signal: { maxRuntime: 180, noSeries: false } },
-    { id: 'binge', label: 'Happy to start a series', tags: [], signal: { seriesOk: true } },
+  { id: 'time', cat: 'context', prompt: 'How much time do you have?', follow: { short: 'Under two hours.', night: 'A full film night.', binge: 'Series it is.' }, options: [
+    { id: 'short', label: 'Under 2 hours, film only', tags: [], signal: { maxRuntime: 120, noSeries: true } },
+    { id: 'night', label: 'A full evening — epic is fine', tags: [], signal: { noSeries: true } },
+    { id: 'binge', label: 'A series to binge', tags: [], signal: { onlySeries: true } },
   ]},
   { id: 'era', cat: 'context', prompt: 'Does old cinema put you off?', follow: { new: 'New only.', gold: '2000s onward fine.', any: 'Any era welcome.' }, options: [
     { id: 'new', label: 'Keep it new', tags: [], signal: { minYear: 2015 } },
@@ -234,13 +234,15 @@ export function verify(title, region) {
   const pname = pid => (PLATFORMS.find(p => p.id === pid) || {}).name || pid;
   const playable = title.avail.filter(a => a.type === 'stream' && a.regions.includes(region));
   const rent = title.avail.filter(a => a.type !== 'stream' && a.regions.includes(region));
+  // JustWatch has no Bangladesh store; the India listing is the closest check.
   const jw = `https://www.justwatch.com/in/search?q=${encodeURIComponent(title.title)}`;
+  const jwLabel = region === 'BD' ? 'Check JustWatch (India listing)' : 'Check JustWatch IN';
   if (playable.length) {
     const names = playable.map(a => pname(a.p)).join(' + ');
     return {
       badge: `Watch on ${names} [${region}]`, blocked: false, fallback: null,
       steps: [`Open ${names} — signed into the ${region} store`, `Search “${title.title} (${title.year})” exactly`, `Play — verified for ${region}`],
-      links: [{ label: `Check JustWatch ${region}`, url: jw }],
+      links: [{ label: jwLabel, url: jw }],
     };
   }
   if (rent.length) {
@@ -248,15 +250,15 @@ export function verify(title, region) {
     return {
       badge: `Not streaming — rent on ${names} [${region}]`, blocked: true,
       fallback: `Not in subscription. Rent HD on ${names}, or pick a green-badge title.`,
-      steps: [`Open ${names}`, `Search “${title.title} (${title.year})” — Rent section`, `Rent HD (usually Rs 120–350 in IN)`],
-      links: [{ label: `Check JustWatch ${region}`, url: jw }],
+      steps: [`Open ${names}`, `Search “${title.title} (${title.year})” — Rent section`, region === 'IN' ? 'Rent HD (usually Rs 120–350)' : 'Rent HD from that store'],
+      links: [{ label: jwLabel, url: jw }],
     };
   }
   const alts = CATALOGUE.filter(t => t.id !== title.id && t.avail.some(a => a.type === 'stream' && a.regions.includes(region))).slice(0, 2).map(t => t.title);
   return {
     badge: `Not in ${region} — ignore Google`, blocked: true,
     fallback: `Not on OTT in ${region} right now. Try: ${alts.join(' / ') || 'Platform Explorer'}.`,
-    steps: ['Do not trust the Google availability box — it ignores country', `Search JustWatch with region set to ${region}`, 'Pick a green-badge result instead'],
-    links: [{ label: `Verify on JustWatch ${region}`, url: jw }],
+    steps: ['Do not trust the Google availability box — it ignores country', region === 'BD' ? 'Check the platform app directly — JustWatch has no BD store' : 'Search JustWatch with region set to IN', 'Pick a green-badge result instead'],
+    links: [{ label: jwLabel, url: jw }],
   };
 }

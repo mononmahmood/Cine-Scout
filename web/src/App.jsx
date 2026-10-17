@@ -8,20 +8,45 @@ import { HeroReel, Card, Thinking, wait, REDUCED } from './ui.jsx';
 const NEVER = [['Horror', G.horror], ['War', G.war], ['Romance', G.romance], ['Animation', G.animation], ['Musicals', G.music], ['Documentary', G.documentary]];
 const regionName = r => (r === 'IN' ? 'India' : 'Bangladesh');
 
-function Taste({ initial, available, onDone }) {
+const LANG_CHOICES = [['hi', 'Hindi'], ['bn', 'Bengali'], ['en', 'English'], ['ta', 'Tamil'], ['te', 'Telugu'], ['ml', 'Malayalam'], ['kn', 'Kannada'], ['mr', 'Marathi'], ['ko', 'Korean'], ['ja', 'Japanese'], ['es', 'Spanish'], ['fr', 'French']];
+const langName = c => LANG_CHOICES.find(l => l[0] === c)?.[1] || c;
+
+// First page on a new device, and "My taste" afterwards. Everything here is a
+// default: answering a question about the same thing always wins.
+function Taste({ initial, available, welcome, onDone }) {
   const [services, setServices] = useState(initial?.services || []);
   const [never, setNever] = useState(initial?.never || []);
+  const [langs, setLangs] = useState(initial?.langs || []);
+  const [maxRuntime, setMaxRuntime] = useState(initial?.maxRuntime || 240);
   const tg = (list, set, k) => set(list.includes(k) ? list.filter(x => x !== k) : [...list, k]);
   return (
-    <div className="onboard">
-      <h2>Tell it what you have.</h2>
-      <p className="mut">Both are optional and can be changed any time.</p>
-      <label>Services you subscribe to <span className="mut">(only these will be recommended)</span></label>
-      <div className="chips">{PLATFORMS.filter(p => available[p.id]).map(p => <button key={p.id} className={`chip ${services.includes(p.id) ? 'on' : ''}`} onClick={() => tg(services, setServices, p.id)}>{p.name}</button>)}</div>
+    <div className={`onboard ${welcome ? 'welcome' : ''}`}>
+      {welcome ? (
+        <div className="welcome-head">
+          <h1 className="logo big">CINE <span className="scout">SCOUT</span></h1>
+          <p className="slogan">for those who stay for the credits</p>
+          <p className="mut">Four quick choices so every pick fits you. All optional — you can change them any time under <b>My taste</b>.</p>
+        </div>
+      ) : (
+        <>
+          <h2>Your taste</h2>
+          <p className="mut">These are defaults. If you answer a question about the same thing, your answer wins.</p>
+        </>
+      )}
+      <label>Usual film length: <b>{maxRuntime >= 240 ? 'any length' : `up to ${Math.floor(maxRuntime / 60)} h ${maxRuntime % 60 ? (maxRuntime % 60) + ' min' : ''}`}</b></label>
+      <input type="range" min="90" max="240" step="10" value={maxRuntime} onChange={e => setMaxRuntime(+e.target.value)} />
+      <div className="rangeticks mut"><span>1 h 30</span><span>2 h</span><span>3 h</span><span>Any</span></div>
+      <label>Languages you watch <span className="mut">(none selected = any language)</span></label>
+      <div className="chips wrap">{LANG_CHOICES.map(([c, n]) => <button key={c} className={`chip ${langs.includes(c) ? 'on' : ''}`} onClick={() => tg(langs, setLangs, c)}>{n}</button>)}</div>
+      <label>Services you subscribe to <span className="mut">(none selected = all)</span></label>
+      <div className="chips wrap">{PLATFORMS.filter(p => available[p.id]).map(p => <button key={p.id} className={`chip ${services.includes(p.id) ? 'on' : ''}`} onClick={() => tg(services, setServices, p.id)}>{p.name}</button>)}</div>
       {!Object.keys(available).length && <p className="mut small">Loading services for your region…</p>}
       <label>Never recommend</label>
-      <div className="chips">{NEVER.map(([n, id]) => <button key={id} className={`chip ${never.includes(id) ? 'on' : ''}`} onClick={() => tg(never, setNever, id)}>{n}</button>)}</div>
-      <button className="bigbtn" onClick={() => onDone({ services, never })}>Save</button>
+      <div className="chips wrap">{NEVER.map(([n, id]) => <button key={id} className={`chip ${never.includes(id) ? 'on' : ''}`} onClick={() => tg(never, setNever, id)}>{n}</button>)}</div>
+      <div className="btnrow">
+        <button className="bigbtn" onClick={() => onDone({ services, never, langs, maxRuntime: maxRuntime >= 240 ? null : maxRuntime })}>{welcome ? 'Start scouting' : 'Save'}</button>
+        {welcome && <button className="bigbtn ghost" onClick={() => onDone({})}>Skip for now</button>}
+      </div>
     </div>
   );
 }
@@ -49,9 +74,10 @@ export default function App() {
   const [route, setRoute] = useState('mind');
   const [region, setRegion] = useState('IN');
   const [prefs, setPrefs] = useState(() => loadPrefs() || { services: [], never: [] });
+  const firstVisit = useRef(!loadPrefs());
   const [history, setHistory] = useState(() => loadHistory());
   const [marked, setMarked] = useState(() => { try { return JSON.parse(localStorage.getItem('cinescout.marked.v2') || '[]'); } catch { return []; } });
-  const [panel, setPanel] = useState(null); // 'taste' | 'watched'
+  const [panel, setPanel] = useState(() => (loadPrefs() ? null : 'welcome')); // 'welcome' | 'taste' | 'watched'
   const [toast, setToast] = useState(null);
   const [leavingIds, setLeavingIds] = useState(new Set());
   const [apiError, setApiError] = useState(null);
@@ -114,18 +140,22 @@ export default function App() {
     serviceNames: (prefs.services || []).map(id => PLATFORMS.find(p => p.id === id)?.name).filter(Boolean),
   }), [region, dataRegion, history, services, regionNote, prefs]);
 
-  const st = useMemo(() => {
-    const s = stateOf(answers, mood);
+  // taste defaults; an answer to the same question always wins
+  const withPrefs = (s, na) => {
     (prefs.never || []).forEach(g => { s.none.movie.add(g); s.none.tv.add(g); });
+    const answered = new Set(na.map(a => a.qid));
+    if (prefs.maxRuntime && !answered.has('runtime') && !s.maxRuntime) { s.maxRuntime = prefs.maxRuntime; s.prefRuntime = true; }
+    if (prefs.langs?.length && !answered.has('language') && !s.langs) { s.langs = prefs.langs; s.prefLangs = true; }
     return s;
-  }, [answers, mood, prefs]);
+  };
+  const st = useMemo(() => withPrefs(stateOf(answers, mood), answers), [answers, mood, prefs]); // eslint-disable-line
 
   // ---- Mind-Reader flow ----
   useEffect(() => { if (phase === 'ask' && !current && !answers.length) setCurrent(nextQuestion([], st, null)); }, [phase, current, answers.length]); // eslint-disable-line
 
   const advance = async (na, m = mood) => {
     const my = ++run.current;
-    const s = stateOf(na, m); (prefs.never || []).forEach(g => { s.none.movie.add(g); s.none.tv.add(g); });
+    const s = withPrefs(stateOf(na, m), na);
     let nq = nextQuestion(na, s, null);
     if (nq && (nq.core || nq.practical)) { setCurrent(nq); setPhase('ask'); return; }
     setPhase('narrowing'); setCurrent(null);
@@ -141,7 +171,7 @@ export default function App() {
   const finish = async (na = answers, m = mood) => {
     const my = ++run.current;
     setPhase('thinking'); setCurrent(null);
-    const s = stateOf(na, m); (prefs.never || []).forEach(g => { s.none.movie.add(g); s.none.tv.add(g); });
+    const s = withPrefs(stateOf(na, m), na);
     try {
       const [p] = await Promise.all([buildPool(s, ctx, 60, 9), wait(1600)]);
       const r = await recommend(s, p, ctx);
@@ -229,18 +259,23 @@ export default function App() {
   const NAV = [
     { k: 'mind', label: 'Mind-Reader', icon: '◎', on: () => go('mind') },
     { k: 'plat', label: 'By platform', icon: '▦', on: () => go('plat') },
-    { k: 'taste', label: 'My services', icon: '♥', on: () => setPanel('taste') },
+    { k: 'taste', label: 'My taste', icon: '♥', on: () => setPanel('taste') },
     { k: 'watched', label: 'Watched', icon: '✓', on: () => setPanel('watched') },
   ];
   const rules = [
     st.kind === 'movie' && 'Films only', st.kind === 'tv' && 'Series only',
     st.maxRuntime && `Under ${st.maxRuntime} min`, st.status === 'ended' && 'Finished series',
-    st.minYear && `${st.minYear} or later`, st.langs && `Language: ${st.langs.join('/')}`,
+    st.minYear && `${st.minYear} or later`, st.langs && `Language: ${st.langs.map(langName).join(', ')}`,
     st.fame === 'gems' && 'Lesser-known only', st.fame === 'popular' && 'Popular only', st.family && 'Family-safe',
     ...mood.avoided.map(a => `No ${a}`), ...(prefs.never || []).map(g => `No ${NEVER.find(n => n[1] === g)?.[0]}`),
     prefs.services?.length && `Only my services`,
   ].filter(Boolean);
   const availablePlatforms = PLATFORMS.filter(p => providers[p.id]);
+  const answeredIds = new Set(answers.map(a => a.qid));
+  const defaults = [
+    prefs.maxRuntime && !answeredIds.has('runtime') && st.kind !== 'tv' && `Films up to ${prefs.maxRuntime} min`,
+    prefs.langs?.length > 0 && !answeredIds.has('language') && prefs.langs.map(langName).join(', '),
+  ].filter(Boolean);
 
   return (
     <div className="app">
@@ -257,6 +292,12 @@ export default function App() {
       </aside>
       <HeroReel pool={heroPool} />
       <main className="main">
+        {view !== 'welcome' && (
+          <header className="mhead">
+            <div className="logo small">CINE <span className="scout">SCOUT</span></div>
+            <div className="slogan">for those who stay for the credits</div>
+          </header>
+        )}
         <div className="topbar">
           <div className="mut livebar"><span className={`livedot ${apiError ? 'off' : ''}`} />{apiError ? 'Live catalogue offline' : 'Live · TMDB, Wikidata, Reddit, critics'}</div>
           <div className="seg" data-on={region}>
@@ -274,8 +315,8 @@ export default function App() {
         {regionNote && <div className="banner soft">{regionNote}</div>}
 
         <div className="view" key={view}>
-          {view === 'taste' ? (
-            <Taste initial={prefs} available={providers} onDone={p => { const n = { ...prefs, ...p }; setPrefs(n); savePrefs(n); setPanel(null); say('Saved'); }} />
+          {view === 'taste' || view === 'welcome' ? (
+            <Taste initial={prefs} available={providers} welcome={view === 'welcome'} onDone={p => { const n = { services: [], never: [], ...prefs, ...p }; setPrefs(n); savePrefs(n); setPanel(null); say(view === 'welcome' ? 'Set — let’s find tonight’s film' : 'Saved'); }} />
           ) : view === 'watched' ? (
             <Watched items={marked} onDone={() => setPanel(null)} onRemove={key => { setMarked(m => m.filter(x => x.key !== key)); setHistory(h => { const n = new Set(h); n.delete(key); return n; }); }} />
           ) : view === 'mind' ? (
@@ -286,14 +327,15 @@ export default function App() {
                 <input type="text" value={freeText} onChange={e => setFreeText(e.target.value)} onKeyDown={e => e.key === 'Enter' && applyFree()} placeholder="Or type it: a funny crime film, no horror…" />
                 <button onClick={applyFree}>Read this</button>
               </div>
-              {(answers.length > 0 || mood.heard.length > 0 || rules.length > 0) && (
+              {(answers.length > 0 || mood.heard.length > 0 || rules.length > 0 || defaults.length > 0) && (
                 <div className="chips small reqs">
                   {answers.map((a, i) => {
                     const q = byId[a.qid]; const o = q.options.find(x => x.id === a.oid);
                     return <button key={a.qid} className="chip req edit" title="Change this answer" onClick={() => editAnswer(i)}><span className="mut">{q.topic}:</span> {o.label} <i>✎</i></button>;
                   })}
                   {mood.heard.map(h => <span key={h} className="chip req">you said “{h}”</span>)}
-                  {rules.filter(r => !answers.length || r.startsWith('No') || r === 'Only my services').map(r => <span key={r} className="chip rule">{r}</span>)}
+                  {rules.filter(r => r.startsWith('No') || r === 'Only my services').map(r => <span key={r} className="chip rule">{r}</span>)}
+                  {defaults.map(d => <button key={d} className="chip rule edit" title="Your default — tap to change" onClick={() => setPanel('taste')}>{d} <span className="mut">· default</span> <i>✎</i></button>)}
                 </div>
               )}
               {phase !== 'done' && (

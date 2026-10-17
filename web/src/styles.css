@@ -382,3 +382,26 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
   .progress { gap: 8px; }
   .progress .mut { font-size: 11px; white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* ---------- v10: phone header, welcome page ---------- */
+.mhead { display: none; }
+.logo.small { font-size: 30px; line-height: 1; margin: 0; letter-spacing: .05em; }
+.logo.big { font-size: clamp(54px, 12vw, 84px); line-height: .95; margin: 0; }
+.logo.big .scout, .logo.small .scout { color: var(--gold); text-shadow: 0 0 28px rgba(229,185,60,.35); }
+.slogan { font-style: italic; color: var(--mut); font-size: 13px; margin: 4px 0 0; }
+.onboard.welcome { max-width: 680px; }
+.welcome-head { text-align: left; margin-bottom: 6px; animation: rise .6s var(--ease) both; }
+.welcome-head .slogan { font-size: 15px; margin: 6px 0 14px; }
+.welcome-head .mut { font-size: 13.5px; }
+.chips.wrap { flex-wrap: wrap !important; overflow: visible; }
+.rangeticks { display: flex; justify-content: space-between; font-size: 10.5px; margin-top: 2px; }
+.chip.rule.edit { cursor: pointer; }
+.chip.rule .mut { color: rgba(245,165,36,.6); }
+@media (max-width: 860px) {
+  .mhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 2px 0 12px; margin-bottom: 10px; border-bottom: 1px solid var(--line); animation: fadeIn .5s ease both; }
+  .mhead .slogan { font-size: 11.5px; margin: 0; }
+}
+@media (max-width: 640px) {
+  .onboard { padding: 18px; border-radius: 16px; margin-top: 12px; }
+  .onboard.welcome { margin-top: 4px; }
+}

@@ -41,7 +41,7 @@ export const QUESTIONS = [
     ],
   },
   {
-    id: 'runtime', practical: 3, topic: 'Length', when: s => s.kind === 'movie',
+    id: 'runtime', practical: 3, topic: 'Length', when: s => s.kind === 'movie' && !s.prefRuntime, // skipped when you set a usual length
     wordings: ['How much time do you have?', 'How long can the film be?'],
     options: [
       { id: 'short', label: 'Under 2 hours', set: { maxRuntime: 120 } },
@@ -96,7 +96,7 @@ export const QUESTIONS = [
     ],
   },
   {
-    id: 'language', topic: 'Language',
+    id: 'language', topic: 'Language', when: s => !s.prefLangs, // skipped when you set your languages
     wordings: ['Which language would you like?', 'Any language preference?'],
     options: [
       { id: 'hi', label: 'Hindi', set: { langs: ['hi'] } },

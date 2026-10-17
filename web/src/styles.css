@@ -436,3 +436,36 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
 @media (prefers-reduced-motion: reduce) {
   .intro-mode .after-intro { opacity: 1; transform: none; }
 }
+
+/* ---------- intro v2: full-bleed, sharper, calmer, gold touch ---------- */
+/* Rendered at real size (not scaled with transform) so YouTube serves a sharper
+   stream; 1.36× over "cover" crops the black bars baked into scope trailers. */
+.intro-video { transform: translate(-50%, -50%);
+  width: calc(max(100vw - var(--side), 177.78vh) * 1.36); height: calc(max((100vw - var(--side)) * .5625, 100vh) * 1.36);
+  min-width: 0; min-height: 0; transition: opacity .45s ease; }
+.intro-still { transform: scale(1.04); animation: none; filter: saturate(1.05); }
+.intro-shade { background:
+  radial-gradient(130% 90% at 50% 40%, transparent 55%, rgba(11,11,13,.55) 100%),
+  linear-gradient(180deg, transparent 0%, transparent 50%, rgba(11,11,13,.75) 100%); }
+.intro-leak { position: absolute; inset: -20%; pointer-events: none; mix-blend-mode: screen; opacity: .22;
+  background: radial-gradient(40% 35% at 20% 30%, rgba(229,185,60,.55), transparent 70%), radial-gradient(30% 30% at 85% 75%, rgba(243,215,124,.35), transparent 70%);
+  animation: leak 18s ease-in-out infinite alternate; }
+@keyframes leak { from { transform: translate3d(-4%, -2%, 0) rotate(-3deg); } to { transform: translate3d(5%, 3%, 0) rotate(4deg); } }
+.intro-gate { position: absolute; inset: 22px; pointer-events: none; opacity: calc(.75 - var(--p, 0)); }
+.intro-gate i { position: absolute; width: 26px; height: 26px; border: 0 solid rgba(229,185,60,.8); }
+.intro-gate i:nth-child(1) { top: 0; left: 0; border-top-width: 1.5px; border-left-width: 1.5px; }
+.intro-gate i:nth-child(2) { top: 0; right: 0; border-top-width: 1.5px; border-right-width: 1.5px; }
+.intro-gate i:nth-child(3) { bottom: 0; left: 0; border-bottom-width: 1.5px; border-left-width: 1.5px; }
+.intro-gate i:nth-child(4) { bottom: 0; right: 0; border-bottom-width: 1.5px; border-right-width: 1.5px; }
+.intro-mode .hero-grain { opacity: .045; }
+.intro-credit i { font-style: italic; color: rgba(244,244,245,.85); }
+
+/* one logo at a time: the big one over the clip hands over to the small one */
+.intro-mode .side .logo, .intro-mode .side .tag { opacity: var(--p, 0); transition: opacity .2s linear; }
+.intro-mode .mhead { opacity: clamp(0, calc((var(--p, 0) - .55) * 3), 1); }
+@media (max-width: 860px) {
+  .intro-gate { inset: 14px; bottom: 92px; }
+  .intro-gate i { width: 20px; height: 20px; }
+}
+.intro-credit { top: 44px; bottom: auto; right: 44px; left: auto; text-align: right; }
+@media (max-width: 860px) { .intro-credit { top: 30px; right: 30px; left: 30px; bottom: auto; text-align: right; } }

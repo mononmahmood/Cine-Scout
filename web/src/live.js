@@ -88,15 +88,32 @@ export async function acclaimByTmdb(keys) {
   return out;
 }
 
-// A short looping moment from the official trailer of a film trending this
-// week (YouTube, via TMDB). Returns null if none can be embedded.
+// Calm, painterly films for the intro: English-language (no burned-in
+// subtitles), official trailers verified embeddable in 1080p or better.
+// [title, year, YouTube key, TMDB backdrop, start s, length s] — each window was
+// picked by eye from the trailer's frame-by-frame storyboard to be free of
+// title cards, review quotes and logos.
+const CALM = [
+  ['Her', 2013, 'ne6p6MfLBxc', '/1YnZchmaGc8dchgRPDpR1KGrixA.jpg', 60, 11],
+  ['Moonlight', 2016, '9NJj12tJzqc', '/jm1oD3eB08LImSwL1LrzF9AJQ5b.jpg', 41, 10],
+  ['Paterson', 2016, 'E8_L9kqie7s', '/5Bk7kYSKAuNrxI5BXpDqlsln2P0.jpg', 4, 11],
+  ['Past Lives', 2023, 'kA244xewjcI', '/7HR38hMBl23lf38MAN63y4pKsHz.jpg', 62, 11],
+  ['The Tree of Life', 2011, 'RrAz1YLh8nY', '/xq1HIwZq9VbuvMQELAua1nqEkH.jpg', 40, 11],
+  ['Days of Heaven', 1978, '7LAqRFoT97o', '/zUqIL6H6d44se9ZOsfvvCuOsbap.jpg', 41, 8],
+  ['Nomadland', 2020, 'BZ4o4jwSaHk', '/563sRDK3rZS31TXCdTY4lfcwrNK.jpg', 65, 8],
+  ['Call Me by Your Name', 2017, 'Z9AYPxH5NTM', '/4Xh2a1WeTp6b8Ksvug0pAMbX3dT.jpg', 80, 11],
+  ['Columbus', 2017, 'mOPsrKZyskg', '/xN88RKXxjPAcQsdBz6XavZ00PFh.jpg', 52, 10],
+  ['Carol', 2015, 'EH3zcuRQXNo', '/2giW19Qb8Lmyd5XCyVU2avABvhZ.jpg', 40, 11],
+  ['Brooklyn', 2015, 'IzgsaBGwap8', '/2T4bqHgYfzXNQoALJsvhW40kDTg.jpg', 60, 11],
+  ['The Florida Project', 2017, 'WwQ-NH1rRT4', '/GOwNU7Z9G3ORjNxdZnURfuIGS6.jpg', 40, 11],
+  ['Manchester by the Sea', 2016, 'NxQmuJnrjxg', '/fjk4eE8Ypke4YLv5A3ArDH4GzYH.jpg', 32, 11],
+  ['Phantom Thread', 2017, 'xNsiQMeSvMk', '/sJZd1H4cl2Nxhj0nutVCK5pMczL.jpg', 46, 10],
+  ['Little Women', 2019, 'AST2-4db4ic', '/lqxxwTRk0l7CubY6JkJdhnwJEkn.jpg', 90, 11],
+  ['Leave No Trace', 2018, '_07ktacEGo8', '/ax6LwhsAXesGCsBagE21DgwUYZf.jpg', 6, 12],
+];
+
+// One quiet moment from a calm film's trailer, chosen at random per visit.
 export async function introClip() {
-  const d = await trending().catch(() => null);
-  const films = (d?.results || []).filter(r => (r.media_type || 'movie') === 'movie' && r.backdrop_path).slice(0, 10);
-  for (const f of films.sort(() => Math.random() - 0.5)) {
-    const v = await tmdb(`/movie/${f.id}/videos`).catch(() => null);
-    const t = (v?.results || []).find(x => x.site === 'YouTube' && x.type === 'Trailer' && x.official) || (v?.results || []).find(x => x.site === 'YouTube' && x.type === 'Trailer');
-    if (t) return { key: t.key, title: f.title, backdrop: IMG(f.backdrop_path, 'w1280'), start: 28 + Math.floor(Math.random() * 30) };
-  }
-  return null;
+  const [title, year, key, backdrop, start, len] = CALM[Math.floor(Math.random() * CALM.length)];
+  return { key, title, year, backdrop: IMG(backdrop, 'original'), start, len };
 }

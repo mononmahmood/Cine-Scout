@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QUESTIONS, byId, G } from './questions.js';
-import { stateOf, visibleOptions, parseMood, EMPTY_MOOD, buildPool, nextQuestion, shouldStop, MAX_Q, recommend, platformPicks, loadHistory, saveHistory, loadPrefs, savePrefs } from './engine.js';
+import { stateOf, visibleOptions, parseMood, EMPTY_MOOD, buildPool, nextQuestion, shouldStop, MAX_Q, recommend, nextBatch, hasMore, platformPicks, loadHistory, saveHistory, loadPrefs, savePrefs } from './engine.js';
 import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest } from './live.js';
 import { CATALOGUE } from './data.js';
 import { HeroReel, Card, Thinking, wait, REDUCED } from './ui.jsx';
@@ -71,6 +71,7 @@ export default function App() {
   const [freeText, setFreeText] = useState('');
   const [mood, setMood] = useState(EMPTY_MOOD);
   const [result, setResult] = useState(null);
+  const [moreState, setMoreState] = useState('idle'); // idle | loading | done
   const run = useRef(0);
 
   // Platform explorer
@@ -79,7 +80,8 @@ export default function App() {
   const [kind, setKind] = useState('movie');
   const [seed, setSeed] = useState(() => (Date.now() % 1e9) | 1);
   const [spin, setSpin] = useState(0);
-  const [plat, setPlat] = useState({ loading: false, recs: [], total: 0 });
+  const [plat, setPlat] = useState({ loading: false, recs: [], total: 0, pool: 0 });
+  const recentGems = useRef(new Set());
   const [hot, setHot] = useState(null);
   const [press, setPress] = useState(null);
 
@@ -144,7 +146,7 @@ export default function App() {
       const [p] = await Promise.all([buildPool(s, ctx, 60, 9), wait(1600)]);
       const r = await recommend(s, p, ctx);
       if (my !== run.current) return;
-      setPool(p); setResult(r); setPhase('done');
+      setPool(p); setResult(r); setMoreState(hasMore(r.cursor) ? 'idle' : 'done'); setPhase('done');
     } catch (e) { if (my === run.current) { setApiError(e.status === 503 ? 'setup' : 'down'); setPhase('ask'); } }
   };
 
@@ -173,6 +175,18 @@ export default function App() {
     if (phase === 'done') finish(answers, m); else if (answers.length >= 2) advance(answers, m);
   };
 
+  const loadMore = async () => {
+    if (!result?.cursor || moreState === 'loading') return;
+    setMoreState('loading');
+    try {
+      const extra = await nextBatch(result.cursor, 10);
+      const have = new Set(result.recs.map(r => r.id));
+      const add = extra.filter(r => !have.has(r.id));
+      setResult(r => ({ ...r, recs: [...r.recs.filter(x => x.strict), ...add, ...r.recs.filter(x => x.strict === false)] }));
+      setMoreState(add.length && hasMore(result.cursor) ? 'idle' : 'done');
+    } catch { setMoreState('idle'); say('Could not load more right now'); }
+  };
+
   const reset = () => { run.current++; setAnswers([]); setFreeText(''); setMood(EMPTY_MOOD); setResult(null); setPool(null); setCurrent(null); setPicked(null); setLeaving(false); setPhase('ask'); setRoute('mind'); setPanel(null); };
 
   const act = (rec, kindOf) => {
@@ -194,8 +208,8 @@ export default function App() {
     const ids = pids.flatMap(id => providers[id] || []);
     if (!ids.length) { setPlat({ loading: false, recs: [], total: 0 }); return; }
     setPlat(p => ({ ...p, loading: true }));
-    platformPicks({ providerIds: ids, region: dataRegion, sort, seed, history, kind }, ctx)
-      .then(r => alive && setPlat({ loading: false, ...r }))
+    platformPicks({ providerIds: ids, region: dataRegion, sort, seed, history, kind, recent: recentGems.current }, ctx)
+      .then(r => { if (!alive) return; r.recs.forEach(x => recentGems.current.add(x.id)); setPlat({ loading: false, ...r }); })
       .catch(e => { if (alive) { setPlat({ loading: false, recs: [], total: 0 }); setApiError(e.status === 503 ? 'setup' : 'down'); } });
     return () => { alive = false; };
   }, [route, pids, sort, kind, seed, dataRegion, providers]); // eslint-disable-line
@@ -232,8 +246,8 @@ export default function App() {
     <div className="app">
       <aside className="side">
         <h1 className="logo">CINE<br /><span className="scout">SCOUT</span></h1>
-        <div className="tag">every film · live from the web</div>
-        <div className="sec">Diagnose · Explore · You</div>
+        <div className="tag">for those who stay for the credits</div>
+        <div className="sec">Reel reading · Explore · You</div>
         <nav className="nav">
           {NAV.map(n => <button key={n.k} className={view === n.k ? 'on' : ''} onClick={n.on}><span className="ico">{n.icon}</span>{n.label}</button>)}
           <button onClick={reset}><span className="ico">↺</span>New session</button>
@@ -299,7 +313,7 @@ export default function App() {
                         <ol className="steps">
                           <li>Turned your answers into {result.trace.rules.length} strict genre rules{rules.length ? ` and ${rules.length} hard filters` : ''}</li>
                           <li>Searched the live TMDB catalogue: {result.trace.total.toLocaleString()} titles passed the filters, {result.trace.strict}{result.trace.exhausted ? '' : '+'} of those passed every rule</li>
-                          <li>Checked the best {result.trace.checked} against Rotten Tomatoes / Metacritic ({result.trace.withScores} had scores) and festival or award records ({result.trace.festival} festival winners)</li>
+                          <li>Rated each pick with IMDb ({result.trace.withImdb} of {recs.length}), Rotten Tomatoes / Metacritic ({result.trace.withScores}) and festival or award records ({result.trace.festival} festival winners)</li>
                           <li>Ranked by combined score; titles you can stream in {regionName(region)}{prefs.services?.length ? ' on your services' : ''} break ties</li>
                         </ol>
                       </details>
@@ -313,7 +327,15 @@ export default function App() {
                         <div className="grid">{close.map((r, i) => <Card key={r.id} {...cardProps(r, exact.length + i)} />)}</div>
                       </>
                     )}
-                    <div className="btnrow"><button className="bigbtn" onClick={reset}>New session</button></div>
+                    <div className="btnrow">
+                      {exact.length > 0 && moreState !== 'done' && (
+                        <button className={`bigbtn more ${moreState === 'loading' ? 'busy' : ''}`} disabled={moreState === 'loading'} onClick={loadMore}>
+                          {moreState === 'loading' ? <><i className="spin dark" />Finding 10 more…</> : 'Show 10 more'}
+                        </button>
+                      )}
+                      {moreState === 'done' && exact.length > 0 && <span className="mut endnote">That’s every title that fits all your answers.</span>}
+                      <button className="bigbtn ghost" onClick={reset}>New session</button>
+                    </div>
                   </>
                 ) : current ? (
                   <div className={`q ${leaving ? 'out' : ''}`} key={current.id + answers.length}>
@@ -335,16 +357,19 @@ export default function App() {
             <>
               <h2 className="headline">Best by platform</h2>
               <div className="mut sub">Live from each service’s current catalogue in {regionName(region)}.</div>
-              {press?.items?.length > 0 && (
-                <div className="hotwrap">
-                  <div className="mut label"><span className="livedot" />Latest from critics, festivals and film blogs</div>
-                  <div className="presslist">{press.items.slice(0, 8).map((i, n) => <a key={i.url} href={i.url} target="_blank" rel="noreferrer" style={{ '--i': n }}><b>{i.source}</b>{i.title}</a>)}</div>
-                </div>
-              )}
-              {hot?.posts?.length > 0 && (
-                <div className="hotwrap">
-                  <div className="mut label"><span className="livedot" />Top on Reddit this week{hot.source === 'archive' ? ' (archive)' : ''}</div>
-                  <div className="presslist">{hot.posts.slice(0, 6).map((p, n) => <a key={p.url} href={p.url} target="_blank" rel="noreferrer" style={{ '--i': n }}><b>r/{p.sub}</b>{p.title} <span className="mut">· {p.score + p.comments}</span></a>)}</div>
+              {(press?.items?.length > 0 || hot?.posts?.length > 0) && (
+                <div className="ticker" aria-label="Latest film news">
+                  <span className="tick-label"><span className="livedot" />Now</span>
+                  <div className="tick-track">
+                    <div className="tick-run">
+                      {[0, 1].map(copy => (
+                        <React.Fragment key={copy}>
+                          {[...(press?.items || []).slice(0, 8).map(i => ({ src: i.source, t: i.title, url: i.url })), ...(hot?.posts || []).slice(0, 4).map(p => ({ src: 'r/' + p.sub, t: p.title, url: p.url }))]
+                            .map(x => <a key={copy + x.url} href={x.url} target="_blank" rel="noreferrer" tabIndex={copy ? -1 : 0}><b>{x.src}</b>{x.t}</a>)}
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
               <div className="chips">{availablePlatforms.map(p => <button key={p.id} className={`chip ${pids.includes(p.id) ? 'on' : ''}`} onClick={() => tpid(p.id)}>{p.name}</button>)}</div>
@@ -358,8 +383,8 @@ export default function App() {
                 </div>
                 {sort === 'gems' && <button className="shuffle" onClick={shuffle}><span className="sic" style={{ transform: `rotate(${spin * 360}deg)` }}>⟳</span> Shuffle gems</button>}
               </div>
-              {plat.total > 0 && <div className="mut note">{sort === 'gems' ? `Drawing at random from ${plat.total.toLocaleString()} highly rated, little-seen titles` : `${plat.total.toLocaleString()} titles on this shelf`}</div>}
-              {plat.loading ? <div className="q"><strong className="qtext">Reading the live catalogue…</strong><div className="think" /></div> : (
+              {!plat.loading && plat.recs.length > 0 && <div className="mut note">{sort === 'gems' ? `${plat.pool} hidden gems found in this draw — IMDb 7+ from a real crowd (or critic-backed), never a blockbuster. Shuffle to dig elsewhere.` : sort === 'best' ? 'Highest IMDb ratings with at least a solid crowd of voters' : sort === 'new' ? 'Released in the last year or so, best IMDb ratings first' : 'Most watched on this service right now'}</div>}
+              {plat.loading ? <Thinking region={region} label="Scouting the shelf" stages={['Reading the service’s live catalogue', 'Looking up every title on IMDb', 'Checking critics and festival records', 'Setting aside the blockbusters', 'Drawing your picks']} /> : (
                 <div className="grid" key={sort + seed + pids.join() + region + kind}>{plat.recs.map((r, i) => <Card key={r.id} {...cardProps(r, i)} />)}</div>
               )}
               {!plat.loading && !plat.recs.length && availablePlatforms.length > 0 && <p className="mut empty">{pids.length ? 'Nothing here yet — try another service or shelf.' : 'Turn on at least one service.'}</p>}

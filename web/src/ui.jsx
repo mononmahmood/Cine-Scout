@@ -71,15 +71,13 @@ export function MatchRing({ pct, strict }) {
   );
 }
 
-export function SourceBars({ bars }) {
+export function Scores({ scores }) {
   return (
-    <div className="bars">
-      {bars.map((b, i) => (
-        <div className="bar" key={b.k}>
-          <span>{b.k}{b.live && <i className="livedot sm" />}</span>
-          <div className="track"><div className="fill" style={{ '--w': Math.max(4, Math.min(100, b.v)) + '%', animationDelay: 0.15 + i * 0.07 + 's' }} /></div>
-          <em>{b.txt}</em>
-        </div>
+    <div className="scores">
+      {scores.map((x, i) => (
+        <span key={x.k} className={`sc ${x.cls}`} style={{ '--i': i }}>
+          <b>{x.k}</b>{x.txt}{x.sub && <small>{x.sub}</small>}
+        </span>
       ))}
     </div>
   );
@@ -95,75 +93,84 @@ function Buzz({ t }) {
     criticsFor(t.title, t.year).then(d => alive && setCr(d)).catch(() => alive && setCr({ items: [] }));
     return () => { alive = false; };
   }, [t.key]);
+  const crit = cr?.items?.[0];
+  if (!rd && !cr) return <div className="buzz"><span className="buzzline mut"><i className="spin" />Checking Reddit and critics…</span></div>;
+  if (!(rd?.threads) && !crit) return null;
   return (
     <div className="buzz">
-      {!rd ? <div className="buzzline mut"><i className="spin" />Reading Reddit…</div>
-        : rd.error ? null
-        : rd.threads ? (
-          <div className="buzzline">
-            <b>Reddit</b> · {rd.threads} thread{rd.threads > 1 ? 's' : ''}{rd.top?.[0] && <> · <a href={rd.top[0].url} target="_blank" rel="noreferrer">“{rd.top[0].title.slice(0, 60)}”</a> <span className="mut">r/{rd.top[0].sub}</span></>}
-          </div>
-        ) : <div className="buzzline mut">Reddit · no recent threads</div>}
-      {cr?.items?.length > 0 && (
-        <div className="critics">
-          {cr.items.slice(0, 2).map(i => <a key={i.url} href={i.url} target="_blank" rel="noreferrer"><b>{i.source}</b> {i.title.slice(0, 80)}</a>)}
-        </div>
-      )}
+      {rd?.threads > 0 && <a className="buzzline" href={rd.top?.[0]?.url} target="_blank" rel="noreferrer"><b>Reddit</b> {rd.threads} thread{rd.threads > 1 ? 's' : ''}{rd.top?.[0] && <span className="mut"> · r/{rd.top[0].sub}</span>}</a>}
+      {crit && <a className="buzzline crit" href={crit.url} target="_blank" rel="noreferrer"><b>{crit.source}</b> {crit.title.slice(0, 70)}</a>}
     </div>
   );
 }
 
 export function Card({ rec, index, leaving, onLove, onSeen, onReject }) {
   const [open, setOpen] = useState(false);
+  const [more, setMore] = useState(false);
   const t = rec.title;
   return (
     <div className={`card ${leaving ? 'leaving' : ''}`} style={{ '--i': index }}>
       <div className="poster">
         <Poster t={t} />
         {rec.gem && <span className="ribbon">✦ Hidden gem</span>}
-        {rec.festival && <span className="ribbon fest">Festival winner</span>}
         <div className="poster-fade" />
         <MatchRing pct={rec.pct} strict={rec.strict} />
       </div>
-      <strong className="ctitle">{t.title}</strong>
-      <div className="mut meta">{rec.meta}</div>
-      {rec.strict === true && <div className="fitline ok">✓ Matches every answer</div>}
-      {rec.strict === false && <div className="fitline near">Misses: {rec.missed.join(' · ')}</div>}
-      <div className="why">{rec.why}</div>
-      <SourceBars bars={rec.bars} />
-      {rec.honors && <div className="honors">🏆 {rec.honors}</div>}
-      <Buzz t={t} />
-      <span className={`avail ${rec.blocked ? 'block' : 'ok'}`}>{rec.badge}</span>
-      {rec.fallback && <div className="fb">{rec.fallback}</div>}
-      <details className="howto" open={open} onToggle={e => setOpen(e.target.open)}>
-        <summary>{open ? 'Hide watch steps' : 'Exactly how to watch'}</summary>
-        <ol className="steps">{rec.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
-        {rec.links.map((l, i) => <a key={i} className="linkbtn ext" href={l.url} target="_blank" rel="noreferrer">{l.label} ↗</a>)}
-      </details>
-      <div className="mini">
-        <button onClick={onLove}>♥ Loved it</button>
-        <button onClick={onSeen}>Seen</button>
-        <button onClick={onReject}>Not for me</button>
+      <div className="cbody">
+        <strong className="ctitle">{t.title}</strong>
+        <div className="mut meta">{rec.meta}</div>
+        <Scores scores={rec.scores} />
+        {rec.strict === false && <div className="fitline near">Misses: {rec.missed.join(' · ')}</div>}
+        {rec.why && <div className={`why ${more ? 'open' : ''}`} onClick={() => setMore(m => !m)}>{rec.why}</div>}
+        {rec.honors && <div className="honors">🏆 {rec.honors}</div>}
+        <Buzz t={t} />
+        <span className={`avail ${rec.blocked ? 'block' : 'ok'}`}>{rec.badge}</span>
+        <details className="howto" open={open} onToggle={e => setOpen(e.target.open)}>
+          <summary>{open ? 'Hide watch steps' : 'How to watch'}</summary>
+          {rec.fallback && <div className="fb">{rec.fallback}</div>}
+          <ol className="steps">{rec.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
+          {rec.links.map((l, i) => <a key={i} className="linkbtn ext" href={l.url} target="_blank" rel="noreferrer">{l.label} ↗</a>)}
+        </details>
+        <div className="mini">
+          <button onClick={onLove} title="Loved it">♥ Loved</button>
+          <button onClick={onSeen}>Seen</button>
+          <button onClick={onReject}>Not for me</button>
+        </div>
       </div>
     </div>
   );
 }
 
-export const SOURCES = (region, n) => [
-  `Turning your ${n} answer${n === 1 ? '' : 's'} into strict rules`,
-  'Searching the full TMDB catalogue live',
-  'Dropping every title that breaks a rule',
-  'Audience scores · TMDB',
-  'Rotten Tomatoes + Metacritic · Wikidata',
-  'Festival prizes and awards · Wikidata',
-  `Where to stream in ${region === 'IN' ? 'India' : 'Bangladesh'}`,
+// Analyzing: an old film-leader countdown. The sweep turns once per number;
+// the line underneath names the real step being worked on.
+const STAGES = region => [
+  'Turning your answers into rules',
+  'Searching every title on TMDB',
+  'Throwing out anything that breaks a rule',
+  'Reading IMDb ratings',
+  'Rotten Tomatoes · Metacritic · festival prizes',
+  `Checking what streams in ${region === 'IN' ? 'India' : 'Bangladesh'}`,
 ];
-export function Thinking({ region, n, label = 'Analyzing every source…' }) {
+export function Thinking({ region, label = 'Rolling the reel', stages }) {
+  const list = stages || STAGES(region);
+  const [n, setN] = useState(8);
+  const [stage, setStage] = useState(0);
+  useEffect(() => {
+    const a = setInterval(() => setN(x => (x <= 2 ? 8 : x - 1)), 900);
+    const b = setInterval(() => setStage(x => Math.min(x + 1, list.length - 1)), 1100);
+    return () => { clearInterval(a); clearInterval(b); };
+  }, [region]);
   return (
-    <div className="q thinking">
-      <strong>{label}</strong>
-      <ul className="scan">{SOURCES(region, n).map((s, i) => <li key={s} style={{ '--i': i }}><i className="tick" />{s}</li>)}</ul>
-      <div className="think" />
+    <div className="leaderwrap">
+      <div className="leader" aria-label="Analyzing">
+        <div className="sweep" key={n} />
+        <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="44" /><circle cx="50" cy="50" r="36" /><line x1="50" y1="0" x2="50" y2="100" /><line x1="0" y1="50" x2="100" y2="50" /></svg>
+        <b key={'n' + n}>{n}</b>
+      </div>
+      <div className="leadertext">
+        <strong>{label}</strong>
+        <span key={stage}>{list[stage]}</span>
+      </div>
     </div>
   );
 }

@@ -68,3 +68,22 @@ export const redditFor = (title, year) => get(`/api/reddit?${new URLSearchParams
 export const redditHot = () => get('/api/reddit?hot=1');
 export const criticsFor = (title, year) => get(`/api/critics?${new URLSearchParams({ q: title, year: year || '' })}`);
 export const criticsLatest = () => get('/api/critics');
+
+// IMDb ratings (from IMDb's public daily dataset) for up to 200 ids per call.
+export async function imdbRatings(ids) {
+  const list = [...new Set(ids.filter(Boolean))].sort();
+  const out = {};
+  for (let i = 0; i < list.length; i += 200) Object.assign(out, await get('/api/imdb?ids=' + list.slice(i, i + 200).join(',')).catch(() => ({})));
+  return out;
+}
+
+// Wikidata acclaim looked up by TMDB keys ("movie:603"); each result carries its IMDb id.
+export async function acclaimByTmdb(keys) {
+  const out = {};
+  const list = [...new Set(keys)];
+  const batches = [];
+  for (let i = 0; i < list.length; i += 40) batches.push(list.slice(i, i + 40));
+  const res = await Promise.all(batches.map(b => get('/api/acclaim?tmdb=' + b.join(',')).catch(() => ({}))));
+  res.forEach(r => Object.assign(out, r));
+  return out;
+}

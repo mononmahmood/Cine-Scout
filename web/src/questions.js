@@ -35,7 +35,7 @@ export const QUESTIONS = [
     options: [
       { id: 'funny', label: 'Light and funny', any: { movie: [G.comedy], tv: [G.comedy] }, none: { movie: [G.horror], tv: [] } },
       { id: 'gripping', label: 'Gripping and suspenseful', any: { movie: [G.thriller, G.crime, G.mystery], tv: [G.crime, G.mystery] } },
-      { id: 'moving', label: 'Emotional and moving', any: { movie: [G.drama, G.romance], tv: [G.drama] }, none: { movie: [G.horror], tv: [] } },
+      { id: 'moving', label: 'Emotional and moving', any: { movie: [G.drama, G.romance], tv: [G.drama] }, none: { movie: [G.horror, G.action, G.thriller], tv: [G.actionAdventure] } },
       { id: 'scary', label: 'Scary', any: { movie: [G.horror], tv: [] }, hideFor: ['tv'] },
       { id: 'epic', label: 'Big adventure or fantasy', any: { movie: [G.adventure, G.fantasy, G.scifi], tv: [G.actionAdventure, G.scifiFantasy] } },
     ],

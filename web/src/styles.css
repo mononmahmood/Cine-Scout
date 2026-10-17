@@ -405,3 +405,34 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
   .onboard { padding: 18px; border-radius: 16px; margin-top: 12px; }
   .onboard.welcome { margin-top: 4px; }
 }
+
+/* ---------- demo: trailer intro (?intro=1) ---------- */
+.intro-bg { position: fixed; top: 0; bottom: 0; left: var(--side); right: 0; z-index: 0; overflow: hidden; pointer-events: none; background: #000;
+  filter: blur(calc(var(--p, 0) * 16px)) brightness(calc(1 - var(--p, 0) * .5)) saturate(calc(1 + var(--p, 0) * .15));
+  transform: scale(calc(1 + var(--p, 0) * .08)); will-change: filter, transform; }
+.intro-still { position: absolute; inset: 0; background-size: cover; background-position: center; animation: driftA 14s ease-in-out infinite alternate; }
+.intro-video { position: absolute; top: 50%; left: 50%; border: 0; pointer-events: none;
+  width: 100vw; height: 56.25vw; min-height: 100%; min-width: 177.78vh; transform: translate(-50%, -50%) scale(1.15);
+  opacity: 0; transition: opacity 1.2s ease; }
+.intro-video.on { opacity: 1; }
+.intro-shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(11,11,13,.15) 0%, rgba(11,11,13,.05) 45%, rgba(11,11,13,.85) 100%); }
+
+.intro-mode .main { padding-top: 0; }
+.intro-hero { position: relative; height: 100svh; display: flex; flex-direction: column; justify-content: flex-end; padding: 0 0 40px; margin: 0 0 10px;
+  opacity: calc(1 - var(--p, 0) * 1.6); transform: translateY(calc(var(--p, 0) * -48px)); }
+.intro-copy { animation: rise .9s var(--ease) both .2s; }
+.intro-copy .logo.big { font-size: clamp(58px, 14vw, 120px); text-shadow: 0 6px 40px rgba(0,0,0,.6); }
+.intro-copy .slogan { font-size: clamp(14px, 2.2vw, 18px); color: #e4e4e7; text-shadow: 0 2px 12px rgba(0,0,0,.8); margin-top: 8px; }
+.intro-cue { align-self: flex-start; margin-top: 28px; display: inline-flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: 0; color: #f4f4f5; cursor: pointer; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; animation: rise .9s var(--ease) both .6s; }
+.intro-cue i { font-style: normal; font-size: 26px; line-height: 1; color: var(--gold); animation: nudge 1.6s ease-in-out infinite; }
+@keyframes nudge { 0%, 100% { transform: translateY(0); opacity: .6; } 50% { transform: translateY(7px); opacity: 1; } }
+.intro-credit { position: absolute; right: 0; bottom: 44px; font-size: 10.5px; color: rgba(244,244,245,.6); text-shadow: 0 1px 6px #000; }
+.intro-mode .after-intro { opacity: clamp(0, calc((var(--p, 0) - .3) * 2.2), 1); transform: translateY(calc((1 - var(--p, 0)) * 36px)); }
+.intro-mode .after-intro .topbar { padding-top: 14px; }
+@media (max-width: 860px) {
+  .intro-hero { padding-bottom: 110px; }
+  .intro-credit { left: 0; right: auto; bottom: 92px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-mode .after-intro { opacity: 1; transform: none; }
+}

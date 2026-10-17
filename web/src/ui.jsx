@@ -174,3 +174,72 @@ export function Thinking({ region, label = 'Rolling the reel', stages }) {
     </div>
   );
 }
+
+// Scroll progress through the first screen, as a CSS variable (--p: 0 → 1),
+// so the clip can blur and the questions rise without re-rendering React.
+export function useIntroScroll(on) {
+  useEffect(() => {
+    if (!on) return;
+    const root = document.documentElement;
+    let raf = 0;
+    const update = () => { raf = 0; root.style.setProperty('--p', Math.min(1, Math.max(0, window.scrollY / (window.innerHeight * 0.75))).toFixed(3)); };
+    const onScroll = () => { if (!raf) raf = requestAnimationFrame(update); };
+    update();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', onScroll);
+    return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onScroll); cancelAnimationFrame(raf); root.style.removeProperty('--p'); };
+  }, [on]);
+}
+
+// Full-screen looping moment from an official trailer (muted, inline, no
+// controls). The trailer's backdrop shows until the video is really playing,
+// and stays if the video can't play (low-power mode, blocked embeds).
+export function IntroClip({ clip }) {
+  const frame = useRef(null);
+  const [playing, setPlaying] = useState(false);
+  const len = 12;
+  useEffect(() => {
+    if (!clip) return;
+    const cmd = (func, args = []) => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
+    const onMsg = e => {
+      if (!/youtube(-nocookie)?\.com$/.test(new URL(e.origin).hostname)) return;
+      let d; try { d = JSON.parse(e.data); } catch { return; }
+      const state = d.event === 'onStateChange' ? d.info : d.event === 'infoDelivery' ? d.info?.playerState : undefined;
+      if (state === 1) setPlaying(true);
+      if (state === 0) { cmd('seekTo', [clip.start, true]); cmd('playVideo'); } // loop the same short moment, like a GIF
+    };
+    window.addEventListener('message', onMsg);
+    return () => window.removeEventListener('message', onMsg);
+  }, [clip]);
+  const onLoad = () => {
+    const w = frame.current?.contentWindow;
+    if (!w) return;
+    w.postMessage(JSON.stringify({ event: 'listening', id: 'intro', channel: 'widget' }), '*');
+    w.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['onStateChange'] }), '*');
+  };
+  const src = clip && `https://www.youtube-nocookie.com/embed/${clip.key}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&disablekb=1&fs=0&start=${clip.start}&end=${clip.start + len}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  return (
+    <div className="intro-bg" aria-hidden="true">
+      {clip?.backdrop && <div className="intro-still" style={{ backgroundImage: `url("${clip.backdrop}")` }} />}
+      {src && !REDUCED && <iframe ref={frame} className={`intro-video ${playing ? 'on' : ''}`} src={src} title="" allow="autoplay; encrypted-media; picture-in-picture" tabIndex={-1} onLoad={onLoad} />}
+      <div className="intro-shade" />
+      <div className="hero-grain" />
+    </div>
+  );
+}
+
+export function IntroHero({ clip, onStart }) {
+  return (
+    <section className="intro-hero">
+      <div className="intro-copy">
+        <h1 className="logo big">CINE <span className="scout">SCOUT</span></h1>
+        <p className="slogan">for those who stay for the credits</p>
+      </div>
+      <button className="intro-cue" onClick={onStart}>
+        <span>Scroll to start</span>
+        <i>⌄</i>
+      </button>
+      {clip && <div className="intro-credit">Now showing · {clip.title} — official trailer</div>}
+    </section>
+  );
+}

@@ -5,6 +5,7 @@ import { send, fetchJson } from './_lib.js';
 const ALLOWED = [
   /^\/discover\/(movie|tv)$/,
   /^\/(movie|tv)\/\d+$/,
+  /^\/(movie|tv)\/\d+\/videos$/,
   /^\/genre\/(movie|tv)\/list$/,
   /^\/watch\/providers\/(movie|tv|regions)$/,
   /^\/trending\/(all|movie|tv)\/(day|week)$/,

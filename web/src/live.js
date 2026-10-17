@@ -87,3 +87,16 @@ export async function acclaimByTmdb(keys) {
   res.forEach(r => Object.assign(out, r));
   return out;
 }
+
+// A short looping moment from the official trailer of a film trending this
+// week (YouTube, via TMDB). Returns null if none can be embedded.
+export async function introClip() {
+  const d = await trending().catch(() => null);
+  const films = (d?.results || []).filter(r => (r.media_type || 'movie') === 'movie' && r.backdrop_path).slice(0, 10);
+  for (const f of films.sort(() => Math.random() - 0.5)) {
+    const v = await tmdb(`/movie/${f.id}/videos`).catch(() => null);
+    const t = (v?.results || []).find(x => x.site === 'YouTube' && x.type === 'Trailer' && x.official) || (v?.results || []).find(x => x.site === 'YouTube' && x.type === 'Trailer');
+    if (t) return { key: t.key, title: f.title, backdrop: IMG(f.backdrop_path, 'w1280'), start: 28 + Math.floor(Math.random() * 30) };
+  }
+  return null;
+}

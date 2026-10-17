@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QUESTIONS, byId, G } from './questions.js';
 import { stateOf, visibleOptions, parseMood, EMPTY_MOOD, buildPool, nextQuestion, shouldStop, MAX_Q, recommend, nextBatch, hasMore, platformPicks, loadHistory, saveHistory, loadPrefs, savePrefs } from './engine.js';
-import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest } from './live.js';
+import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest, introClip } from './live.js';
+
+// Demo: a looping trailer moment on the first screen (?intro=1)
+const INTRO = typeof location !== 'undefined' && new URLSearchParams(location.search).has('intro');
 import { CATALOGUE } from './data.js';
-import { HeroReel, Card, Thinking, wait, REDUCED } from './ui.jsx';
+import { HeroReel, Card, Thinking, wait, REDUCED, IntroClip, IntroHero, useIntroScroll } from './ui.jsx';
 
 const NEVER = [['Horror', G.horror], ['War', G.war], ['Romance', G.romance], ['Animation', G.animation], ['Musicals', G.music], ['Documentary', G.documentary]];
 const regionName = r => (r === 'IN' ? 'India' : 'Bangladesh');
@@ -84,6 +87,10 @@ export default function App() {
   const [heroPool, setHeroPool] = useState(() => CATALOGUE.map(t => t.poster).filter(Boolean));
   const [providers, setProviders] = useState({});
   const [regionNote, setRegionNote] = useState(null);
+  const [clip, setClip] = useState(null);
+  useEffect(() => { if (INTRO) introClip().then(setClip).catch(() => {}); }, []);
+  useIntroScroll(INTRO);
+  const startRef = useRef(null);
   const [dataRegion, setDataRegion] = useState('IN');
 
   // Mind-Reader
@@ -278,7 +285,7 @@ export default function App() {
   ].filter(Boolean);
 
   return (
-    <div className="app">
+    <div className={`app ${INTRO ? 'intro-mode' : ''}`}>
       <aside className="side">
         <h1 className="logo">CINE<br /><span className="scout">SCOUT</span></h1>
         <div className="tag">for those who stay for the credits</div>
@@ -290,8 +297,10 @@ export default function App() {
         <div className="mut memo">{history.size === 0 ? 'No history yet.' : `Remembers ${history.size} — never repeats.`}</div>
         <div className="mut attribution">Film data from TMDB · streaming data via JustWatch · scores and prizes from Wikidata · discussion from Reddit · headlines from critics’ public feeds. This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
       </aside>
-      <HeroReel pool={heroPool} />
+      {INTRO ? <IntroClip clip={clip} /> : <HeroReel pool={heroPool} />}
       <main className="main">
+        {INTRO && <IntroHero clip={clip} onStart={() => startRef.current?.scrollIntoView({ behavior: 'smooth' })} />}
+        <div className="after-intro" ref={startRef}>
         {view !== 'welcome' && (
           <header className="mhead">
             <div className="logo small">CINE <span className="scout">SCOUT</span></div>
@@ -432,6 +441,7 @@ export default function App() {
               {!plat.loading && !plat.recs.length && availablePlatforms.length > 0 && <p className="mut empty">{pids.length ? 'Nothing here yet — try another service or shelf.' : 'Turn on at least one service.'}</p>}
             </>
           )}
+        </div>
         </div>
       </main>
       <nav className="tabbar">

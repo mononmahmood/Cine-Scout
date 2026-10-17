@@ -183,7 +183,8 @@ export function useIntroScroll(on) {
     const root = document.documentElement;
     let raf = 0;
     const update = () => { raf = 0; root.style.setProperty('--p', Math.min(1, Math.max(0, window.scrollY / (window.innerHeight * 0.75))).toFixed(3)); };
-    const onScroll = () => { if (!raf) raf = requestAnimationFrame(update); };
+    // rAF for smoothness; a timer as backup in case frames are paused (background tab, low-power mode)
+    const onScroll = () => { if (!raf) { raf = requestAnimationFrame(update); setTimeout(() => { if (raf) { cancelAnimationFrame(raf); update(); } }, 120); } };
     update();
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll);

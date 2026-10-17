@@ -3,8 +3,10 @@ import { QUESTIONS, byId, G } from './questions.js';
 import { stateOf, visibleOptions, parseMood, EMPTY_MOOD, buildPool, nextQuestion, shouldStop, MAX_Q, recommend, nextBatch, hasMore, platformPicks, loadHistory, saveHistory, loadPrefs, savePrefs } from './engine.js';
 import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest, introReel } from './live.js';
 
-// Demo: a looping trailer moment on the first screen (?intro=1)
-const INTRO = typeof location !== 'undefined' && new URLSearchParams(location.search).has('intro');
+// First screen: a reel of calm trailer moments. ?intro=0 turns it off
+// (the old poster backdrop), as does the system's reduce-motion setting.
+const INTRO = typeof location !== 'undefined' && new URLSearchParams(location.search).get('intro') !== '0'
+  && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 import { CATALOGUE } from './data.js';
 import { HeroReel, Card, Thinking, wait, REDUCED, IntroReel, IntroHero, useIntroScroll } from './ui.jsx';
 
@@ -16,7 +18,7 @@ const langName = c => LANG_CHOICES.find(l => l[0] === c)?.[1] || c;
 
 // First page on a new device, and "My taste" afterwards. Everything here is a
 // default: answering a question about the same thing always wins.
-function Taste({ initial, available, welcome, onDone }) {
+function Taste({ initial, available, welcome, plain, onDone }) {
   const [services, setServices] = useState(initial?.services || []);
   const [never, setNever] = useState(initial?.never || []);
   const [langs, setLangs] = useState(initial?.langs || []);
@@ -26,8 +28,10 @@ function Taste({ initial, available, welcome, onDone }) {
     <div className={`onboard ${welcome ? 'welcome' : ''}`}>
       {welcome ? (
         <div className="welcome-head">
-          <h1 className="logo big">CINE <span className="scout">SCOUT</span></h1>
-          <p className="slogan">for those who stay for the credits</p>
+          {plain ? <h2>Before the first film</h2> : <>
+            <h1 className="logo big">CINE <span className="scout">SCOUT</span></h1>
+            <p className="slogan">for those who stay for the credits</p>
+          </>}
           <p className="mut">Four quick choices so every pick fits you. All optional — you can change them any time under <b>My taste</b>.</p>
         </div>
       ) : (
@@ -298,7 +302,7 @@ export default function App() {
       </aside>
       {INTRO ? <IntroReel clips={reel} /> : <HeroReel pool={heroPool} />}
       <main className="main">
-        {view !== 'welcome' && (
+        {(view !== 'welcome' || INTRO) && (
           <header className="mhead">
             <div className="logo small">CINE <span className="scout">SCOUT</span></div>
             <div className="slogan">for those who stay for the credits</div>
@@ -324,7 +328,7 @@ export default function App() {
 
         <div className="view" key={view}>
           {view === 'taste' || view === 'welcome' ? (
-            <Taste initial={prefs} available={providers} welcome={view === 'welcome'} onDone={p => { const n = { services: [], never: [], ...prefs, ...p }; setPrefs(n); savePrefs(n); setPanel(null); say(view === 'welcome' ? 'Set — let’s find tonight’s film' : 'Saved'); }} />
+            <Taste initial={prefs} available={providers} welcome={view === 'welcome'} plain={INTRO} onDone={p => { const n = { services: [], never: [], ...prefs, ...p }; setPrefs(n); savePrefs(n); setPanel(null); say(view === 'welcome' ? 'Set — let’s find tonight’s film' : 'Saved'); }} />
           ) : view === 'watched' ? (
             <Watched items={marked} onDone={() => setPanel(null)} onRemove={key => { setMarked(m => m.filter(x => x.key !== key)); setHistory(h => { const n = new Set(h); n.delete(key); return n; }); }} />
           ) : view === 'mind' ? (

@@ -1,213 +1,46 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CATALOGUE, QUESTIONS, PLATFORMS, fetchCatalogue } from './data.js';
-import { analyze, parseMood, EMPTY_MOOD, strictPool, pickNext, shouldFinish, MAX_Q, coopLine, buildRecommendations, topForPlatform, loadHistory, saveHistory, loadPrefs, savePrefs, loadRuns, saveRuns, recordShown } from './engine.js';
-import { loadPosterCache, cachedUrl } from './posterBoost.js';
-import { pullAwardsLive, pullBuzzLive, pullRedditHot, loadLive, saveLive } from './live.js';
+import { QUESTIONS, byId, G } from './questions.js';
+import { stateOf, visibleOptions, parseMood, EMPTY_MOOD, buildPool, nextQuestion, shouldStop, MAX_Q, recommend, platformPicks, loadHistory, saveHistory, loadPrefs, savePrefs } from './engine.js';
+import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest } from './live.js';
+import { CATALOGUE } from './data.js';
+import { HeroReel, Card, Thinking, wait, REDUCED } from './ui.jsx';
 
-const LANGS = ['Hindi', 'English', 'Korean', 'Bengali'];
-const REDUCED = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-const wait = ms => new Promise(r => setTimeout(r, REDUCED ? 0 : ms));
+const NEVER = [['Horror', G.horror], ['War', G.war], ['Romance', G.romance], ['Animation', G.animation], ['Musicals', G.music], ['Documentary', G.documentary]];
+const regionName = r => (r === 'IN' ? 'India' : 'Bangladesh');
 
-// Full-bleed backdrop. Two persistent layers: the next poster is preloaded,
-// mounted invisibly on the back layer, then crossfaded in while both layers
-// keep drifting — so there is never a pop, a restart, or a half-loaded image.
-function HeroReel({ pool, artPool }) {
-  const pools = useRef({ pool, artPool });
-  pools.current = { pool, artPool };
-  const [layers, setLayers] = useState([{ src: null, n: 0 }, { src: null, n: 0 }]);
-  const [front, setFront] = useState(0);
-  const ready = pool.length > 0;
-  useEffect(() => {
-    if (!ready) return;
-    let alive = true, cur = 1, last = null, timer;
-    const pick = () => {
-      const { pool: p, artPool: a } = pools.current;
-      const list = a.length && Math.random() < 0.45 ? a : p;
-      let s = list[Math.floor(Math.random() * list.length)].src, guard = 0;
-      while (s === last && guard++ < 8) s = list[Math.floor(Math.random() * list.length)].src;
-      return s;
-    };
-    const load = src => new Promise(res => { const i = new Image(); i.onload = () => res(i.decode ? i.decode().then(() => true, () => true) : true); i.onerror = () => res(false); i.src = src; });
-    const step = async () => {
-      if (document.hidden) { timer = setTimeout(step, 1500); return; }
-      let src, tries = 0;
-      do { src = pick(); } while (!(await load(src)) && ++tries < 4);
-      if (!alive) return;
-      const next = 1 - cur;
-      setLayers(L => { const c = [...L]; c[next] = { src, n: L[next].n + 1 }; return c; });
-      // two frames: let the hidden layer paint at its start pose before fading in
-      requestAnimationFrame(() => requestAnimationFrame(() => { if (alive) setFront(next); }));
-      cur = next; last = src;
-      timer = setTimeout(step, REDUCED ? 20000 : 8000);
-    };
-    step();
-    return () => { alive = false; clearTimeout(timer); };
-  }, [ready]);
-  return (
-    <div className="hero" aria-hidden="true">
-      {layers.map((l, i) => l.src && (
-        <div key={i + '-' + l.n} className={`hero-layer drift-${l.n % 2} ${front === i ? 'on' : ''}`} style={{ backgroundImage: `url("${l.src}")` }} />
-      ))}
-      <div className="hero-shade" />
-      <div className="hero-grain" />
-    </div>
-  );
-}
-
-function Poster({ t, src }) {
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const ref = useRef(null);
-  useEffect(() => { if (ref.current?.complete && ref.current.naturalWidth) setLoaded(true); }, [src]);
-  if (src && !failed) return <img ref={ref} src={src} alt={t.title} loading="lazy" className={loaded ? 'loaded' : ''} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />;
-  const initials = t.title.split(' ').map(w => w[0]).slice(0, 2).join('');
-  return <div className="poster-fallback"><span>{initials}</span><small>{t.year}</small></div>;
-}
-
-function MatchRing({ pct, strict }) {
-  const C = 2 * Math.PI * 17;
-  return (
-    <div className={`ring ${strict === false ? 'near' : ''}`} title={`${pct}% match`}>
-      <svg viewBox="0 0 40 40" width="46" height="46">
-        <circle cx="20" cy="20" r="17" className="ring-bg" />
-        <circle cx="20" cy="20" r="17" className="ring-fg" style={{ strokeDasharray: C, '--off': C * (1 - pct / 100), '--full': C }} />
-      </svg>
-      <b>{pct}<small>%</small></b>
-    </div>
-  );
-}
-
-function SourceBars({ bars }) {
-  return (
-    <div className="bars">
-      {bars.map((b, i) => (
-        <div className="bar" key={b.k}>
-          <span>{b.k}{b.live && <i className="livedot sm" />}</span>
-          <div className="track"><div className="fill" style={{ '--w': Math.max(4, Math.min(100, b.v)) + '%', animationDelay: 0.15 + i * 0.07 + 's' }} /></div>
-          <em>{b.txt}</em>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Card({ rec, src, index, leaving, onLove, onSeen, onReject }) {
-  const [open, setOpen] = useState(false);
-  const t = rec.title;
-  return (
-    <div className={`card ${leaving ? 'leaving' : ''}`} style={{ '--i': index }}>
-      <div className="poster">
-        <Poster t={t} src={src} />
-        {rec.gem && <span className="ribbon">✦ Hidden gem</span>}
-        <div className="poster-fade" />
-        <MatchRing pct={rec.pct} strict={rec.strict} />
-      </div>
-      <strong className="ctitle">{t.title}</strong>
-      <div className="mut meta">{t.year} · {t.kind === 'tv' ? 'Series' : 'Film'}{t.kind === 'movie' ? ` · ${t.runtime} min` : ''} · {t.langs.slice(0, 2).join(', ')}</div>
-      {rec.strict === true && <div className="fitline ok">✓ Matches every answer</div>}
-      {rec.strict === false && <div className="fitline near">Misses: {rec.missed.join(' · ')}</div>}
-      <div className="why">{rec.why}</div>
-      <SourceBars bars={rec.bars} />
-      {rec.because?.length > 0 && <div className="because">Because you picked: {rec.because.join(' · ')}</div>}
-      {rec.honors && <div className="honors">🏆 {rec.honors}</div>}
-      <span className={`avail ${rec.blocked ? 'block' : 'ok'}`}>{rec.badge}</span>
-      {rec.fallback && <div className="fb">{rec.fallback}</div>}
-      <details className="howto" open={open} onToggle={e => setOpen(e.target.open)}>
-        <summary>{open ? 'Hide watch steps' : 'Exactly how to watch'}</summary>
-        <ol className="steps">{rec.steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
-        {rec.links.map((l, i) => <a key={i} className="linkbtn ext" href={l.url} target="_blank" rel="noreferrer">{l.label} ↗</a>)}
-      </details>
-      <div className="mini">
-        <button onClick={onLove}>♥ Loved it</button>
-        <button onClick={onSeen}>Seen</button>
-        <button onClick={onReject}>Not for me</button>
-      </div>
-    </div>
-  );
-}
-
-const SOURCES = (region, n) => [
-  `Reading your ${n} answer${n === 1 ? '' : 's'} as strict requirements`,
-  'Dropping everything that breaks a hard rule',
-  'IMDb audience ratings',
-  'Critics score',
-  'Rotten Tomatoes + Metacritic · Wikidata live',
-  'Reddit film-sub chatter · live',
-  'Awards · Wikidata live',
-  `Checking streaming in ${region === 'IN' ? 'India' : 'Bangladesh'}`,
-];
-function Thinking({ region, n }) {
-  return (
-    <div className="q thinking">
-      <strong>Analyzing every source…</strong>
-      <ul className="scan">{SOURCES(region, n).map((s, i) => <li key={s} style={{ '--i': i }}><i className="tick" />{s}</li>)}</ul>
-      <div className="think" />
-    </div>
-  );
-}
-
-function rulesOf(sig, avoided) {
-  const r = [];
-  if (sig.maxRuntime) r.push(`Under ${Math.round(sig.maxRuntime / 60)} h`);
-  if (sig.noSeries) r.push('Films only');
-  if (sig.onlySeries) r.push('Series only');
-  if (sig.minYear) r.push(`${sig.minYear}+`);
-  if (sig.thrill === 0) r.push('No tension');
-  if (sig.brain === 0) r.push('Nothing heavy');
-  if (sig.arthouse === -1) r.push('No art-house');
-  if (sig.clean) r.push('Group-safe');
-  if (sig.safeOnly) r.push('Legends only');
-  if (sig.gemBoost) r.push('No famous titles');
-  (avoided || []).forEach(a => r.push(`No ${a}`));
-  return r;
-}
-
-function Onboard({ initial, onDone }) {
-  const [langs, setLangs] = useState(initial?.langs || ['Hindi', 'English']);
-  const [maxRuntime, setMaxRuntime] = useState(initial?.maxRuntime || 240);
-  const [noSeries, setNoSeries] = useState(initial?.noSeries || false);
-  const [loved, setLoved] = useState((initial?.lovedTags || []).join(', '));
-  const [hated, setHated] = useState((initial?.hatedTags || []).join(', '));
-  const [hideFamous, setHideFamous] = useState(initial?.hideFamous || false);
-  const tg = k => setLangs(langs.includes(k) ? langs.filter(x => x !== k) : [...langs, k]);
-  const split = s => s.split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+function Taste({ initial, available, onDone }) {
+  const [services, setServices] = useState(initial?.services || []);
+  const [never, setNever] = useState(initial?.never || []);
+  const tg = (list, set, k) => set(list.includes(k) ? list.filter(x => x !== k) : [...list, k]);
   return (
     <div className="onboard">
-      <h2>One minute, then it knows you.</h2>
-      <p className="mut">Taste + history. Nothing repeats, legends step aside unless you ask for them.</p>
-      <label>Languages you enjoy <span className="mut">(English titles always allowed)</span></label>
-      <div className="chips">{LANGS.map(l => <button key={l} className={`chip ${langs.includes(l) ? 'on' : ''}`} onClick={() => tg(l)}>{l}</button>)}</div>
-      <label>Max movie length: <b>{maxRuntime >= 240 ? 'no limit' : maxRuntime + ' min'}</b></label>
-      <input type="range" min="90" max="240" step="5" value={maxRuntime} onChange={e => setMaxRuntime(+e.target.value)} />
-      <label className="check"><input type="checkbox" checked={noSeries} onChange={e => setNoSeries(e.target.checked)} /> Films only — no series</label>
-      <label>Films you loved (comma separated)</label>
-      <input type="text" value={loved} onChange={e => setLoved(e.target.value)} placeholder="Tumbbad, Burning" />
-      <label>What should it never push? (e.g. horror, slow)</label>
-      <input type="text" value={hated} onChange={e => setHated(e.target.value)} placeholder="horror" />
-      <label className="check"><input type="checkbox" checked={hideFamous} onChange={e => setHideFamous(e.target.checked)} /> I have seen most famous blockbusters — hide them unless I ask for legends</label>
-      <button className="bigbtn" onClick={() => onDone({ langs, maxRuntime: maxRuntime >= 240 ? null : maxRuntime, noSeries, hideFamous, lovedTags: split(loved), hatedTags: split(hated) })}>Save and start</button>
+      <h2>Tell it what you have.</h2>
+      <p className="mut">Both are optional and can be changed any time.</p>
+      <label>Services you subscribe to <span className="mut">(only these will be recommended)</span></label>
+      <div className="chips">{PLATFORMS.filter(p => available[p.id]).map(p => <button key={p.id} className={`chip ${services.includes(p.id) ? 'on' : ''}`} onClick={() => tg(services, setServices, p.id)}>{p.name}</button>)}</div>
+      {!Object.keys(available).length && <p className="mut small">Loading services for your region…</p>}
+      <label>Never recommend</label>
+      <div className="chips">{NEVER.map(([n, id]) => <button key={id} className={`chip ${never.includes(id) ? 'on' : ''}`} onClick={() => tg(never, setNever, id)}>{n}</button>)}</div>
+      <button className="bigbtn" onClick={() => onDone({ services, never })}>Save</button>
     </div>
   );
 }
 
-function SeenList({ cat, history, toggle, markAll, onDone }) {
-  const famous = [...cat].sort((a, b) => b.buzz - a.buzz).slice(0, 20);
+function Watched({ items, onRemove, onDone }) {
   return (
     <div className="onboard wide">
-      <h2>Tick what you have watched.</h2>
-      <p className="mut">Checked titles never appear again — in Mind-Reader or Platform lists.</p>
+      <h2>Titles you have marked</h2>
+      <p className="mut">These never come back as recommendations. Remove one to allow it again.</p>
+      {items.length === 0 && <p className="mut">Nothing yet — use “Seen” or “Not for me” on any card.</p>}
       <div className="seenlist">
-        {famous.map((t, i) => (
-          <label key={t.id} className={`seenrow ${history.has(t.id) ? 'on' : ''}`} style={{ '--i': i }}>
-            <input type="checkbox" checked={history.has(t.id)} onChange={() => toggle(t.id)} />
-            <span><b>{t.title}</b> <span className="mut">({t.year} · IMDb {t.imdb.toFixed(1)})</span></span>
-          </label>
+        {items.map((t, i) => (
+          <div key={t.key} className="seenrow on" style={{ '--i': i }}>
+            <span><b>{t.title}</b> <span className="mut">({t.year || '—'})</span></span>
+            <button className="linkbtn" onClick={() => onRemove(t.key)}>remove</button>
+          </div>
         ))}
       </div>
-      <div className="btnrow">
-        <button className="bigbtn" onClick={markAll}>Seen them all</button>
-        <button className="bigbtn ghost" onClick={onDone}>Done — give me fresh picks</button>
-      </div>
+      <div className="btnrow"><button className="bigbtn" onClick={onDone}>Done</button></div>
     </div>
   );
 }
@@ -215,88 +48,104 @@ function SeenList({ cat, history, toggle, markAll, onDone }) {
 export default function App() {
   const [route, setRoute] = useState('mind');
   const [region, setRegion] = useState('IN');
-  const [cat, setCat] = useState(CATALOGUE);
+  const [prefs, setPrefs] = useState(() => loadPrefs() || { services: [], never: [] });
   const [history, setHistory] = useState(() => loadHistory());
-  const [prefs, setPrefs] = useState(() => loadPrefs());
-  const [showPrefs, setShowPrefs] = useState(() => !loadPrefs());
-  const [showSeen, setShowSeen] = useState(false);
-  const [live, setLive] = useState(() => loadLive());
-  const liveRef = useRef(live); liveRef.current = live;
-  const [liveMsg, setLiveMsg] = useState('Pulling live data…');
-  const [hot, setHot] = useState(null);
+  const [marked, setMarked] = useState(() => { try { return JSON.parse(localStorage.getItem('cinescout.marked.v2') || '[]'); } catch { return []; } });
+  const [panel, setPanel] = useState(null); // 'taste' | 'watched'
   const [toast, setToast] = useState(null);
   const [leavingIds, setLeavingIds] = useState(new Set());
+  const [apiError, setApiError] = useState(null);
+  const [heroPool, setHeroPool] = useState(() => CATALOGUE.map(t => t.poster).filter(Boolean));
+  const [providers, setProviders] = useState({});
+  const [regionNote, setRegionNote] = useState(null);
+  const [dataRegion, setDataRegion] = useState('IN');
 
-  // Mind-Reader state machine: ask → thinking → done
-  const [phase, setPhase] = useState('ask');
-  const [asked, setAsked] = useState([]);
-  const [answers, setAnswers] = useState({});
+  // Mind-Reader
+  const [phase, setPhase] = useState('ask'); // ask | narrowing | thinking | done
+  const [answers, setAnswers] = useState([]);
   const [current, setCurrent] = useState(null);
+  const [wording] = useState(() => Object.fromEntries(QUESTIONS.map(q => [q.id, Math.floor(Math.random() * q.wordings.length)])));
   const [picked, setPicked] = useState(null);
   const [leaving, setLeaving] = useState(false);
+  const [pool, setPool] = useState(null);
   const [freeText, setFreeText] = useState('');
   const [mood, setMood] = useState(EMPTY_MOOD);
   const [result, setResult] = useState(null);
+  const run = useRef(0);
 
   // Platform explorer
   const [pids, setPids] = useState(['prime']);
   const [sort, setSort] = useState('gems');
+  const [kind, setKind] = useState('movie');
   const [seed, setSeed] = useState(() => (Date.now() % 1e9) | 1);
-  const [recentGems, setRecentGems] = useState(new Set());
   const [spin, setSpin] = useState(0);
+  const [plat, setPlat] = useState({ loading: false, recs: [], total: 0 });
+  const [hot, setHot] = useState(null);
+  const [press, setPress] = useState(null);
 
-  const art = useMemo(() => loadPosterCache(), []);
-  useEffect(() => { fetchCatalogue().then(setCat); }, []);
-  useEffect(() => { saveHistory(history); }, [history]);
-
-  const say = msg => { setToast({ msg, k: Date.now() }); };
+  const say = msg => setToast({ msg, k: Date.now() });
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2400); return () => clearTimeout(t); }, [toast]);
+  useEffect(() => { saveHistory(history); }, [history]);
+  useEffect(() => { try { localStorage.setItem('cinescout.marked.v2', JSON.stringify(marked)); } catch {} }, [marked]);
 
-  // Live pull on every load: awards + review scores for all, buzz for the
-  // titles most likely to surface. Results already on screen stay frozen.
-  const putBuzz = (id, r) => setLive(prev => { const n = { ...(prev || {}), buzz: { ...((prev || {}).buzz || {}), [id]: r } }; saveLive(n); return n; });
-  const refreshLive = async (full = false) => {
-    setLiveMsg('Pulling live data…');
-    try {
-      const aw = await pullAwardsLive(cat.map(t => ({ id: t.id, wiki: t.wiki })));
-      setLive(prev => { const n = { ...(prev || {}), awards: aw, buzz: (prev || {}).buzz || {} }; saveLive(n); return n; });
-      setLiveMsg('Reviews + awards live · buzz updating…');
-    } catch { setLiveMsg('Live reviews unreachable · showing saved'); }
-    try {
-      // skip titles fetched in the last 6 hours — the Reddit archive rate-limits hard
-      const stale = t => !(liveRef.current?.buzz?.[t.id]?.at > Date.now() - 6 * 3600e3);
-      const entries = (full ? cat : [...cat].sort((a, b) => b.buzz - a.buzz).slice(0, 16)).filter(stale);
-      await pullBuzzLive(entries, putBuzz);
-      setLiveMsg(full ? 'All sources live' : 'Live · deeper buzz on Refresh');
-    } catch { setLiveMsg('Live (partial)'); }
-  };
-  useEffect(() => { refreshLive(false); }, []); // eslint-disable-line
+  // live: backdrops, providers for the region, whether TMDB covers the region
   useEffect(() => {
-    if (route === 'plat' && !hot) pullRedditHot(cat).then(setHot).catch(() => {});
-  }, [route]); // eslint-disable-line
+    trending().then(d => {
+      const imgs = (d.results || []).map(r => IMG(r.backdrop_path, 'w1280')).filter(Boolean);
+      if (imgs.length) setHeroPool(imgs);
+      setApiError(null);
+    }).catch(e => setApiError(e.status === 503 ? 'setup' : 'down'));
+  }, []);
+  useEffect(() => {
+    setProviders({}); setRegionNote(null); setDataRegion(region);
+    regionSupported(region).then(ok => {
+      const dr = ok ? region : 'IN';
+      setDataRegion(dr);
+      setRegionNote(ok ? null : `There is no public streaming data for ${regionName(region)}, so availability below uses India’s listings as the closest guide. Netflix and Prime catalogues differ a little between the two — check the app before you settle in.`);
+      providerMap(dr).then(setProviders).catch(() => {});
+    });
+  }, [region]);
 
-  const imgOf = t => t.poster || cachedUrl(art, t.id);
-  const pool = useMemo(() => cat
-    .map(t => ({ src: imgOf(t), art: t.gem || t.tags.includes('art-house') || t.tags.includes('slow-cinema') || t.tags.includes('world-cinema') }))
-    .filter(p => p.src), [cat]); // eslint-disable-line
-  const artPool = useMemo(() => pool.filter(p => p.art), [pool]);
+  const services = useMemo(() => (prefs.services || []).flatMap(id => providers[id] || []), [prefs, providers]);
+  const ctx = useMemo(() => ({
+    region, dataRegion, history, services, regionNote,
+    serviceNames: (prefs.services || []).map(id => PLATFORMS.find(p => p.id === id)?.name).filter(Boolean),
+  }), [region, dataRegion, history, services, regionNote, prefs]);
 
-  const a = useMemo(() => analyze(asked, answers, mood), [asked, answers, mood]);
-  const strictNow = useMemo(() => strictPool(cat, a, prefs, history).length, [cat, a, prefs, history]);
-  const line = useMemo(() => coopLine(asked, answers), [asked, answers]);
-  const rules = rulesOf(a.sig, mood.avoided);
+  const st = useMemo(() => {
+    const s = stateOf(answers, mood);
+    (prefs.never || []).forEach(g => { s.none.movie.add(g); s.none.tv.add(g); });
+    return s;
+  }, [answers, mood, prefs]);
 
-  const nextQ = (na, nans, m) => pickNext(QUESTIONS, na, nans, m, cat, prefs, history);
-  useEffect(() => { if (phase === 'ask' && !current && !asked.length) setCurrent(nextQ([], {}, mood)); }, [phase, current, asked.length]); // eslint-disable-line
+  // ---- Mind-Reader flow ----
+  useEffect(() => { if (phase === 'ask' && !current && !answers.length) setCurrent(nextQuestion([], st, null)); }, [phase, current, answers.length]); // eslint-disable-line
 
-  const finish = async (na, nans, m) => {
+  const advance = async (na, m = mood) => {
+    const my = ++run.current;
+    const s = stateOf(na, m); (prefs.never || []).forEach(g => { s.none.movie.add(g); s.none.tv.add(g); });
+    let nq = nextQuestion(na, s, null);
+    if (nq && (nq.core || nq.practical)) { setCurrent(nq); setPhase('ask'); return; }
+    setPhase('narrowing'); setCurrent(null);
+    try {
+      const p = await buildPool(s, ctx, 60, 4);
+      if (my !== run.current) return;
+      setPool(p);
+      nq = shouldStop(na, p) ? null : nextQuestion(na, s, p);
+      if (nq) { setCurrent(nq); setPhase('ask'); } else finish(na, m);
+    } catch (e) { if (my === run.current) { setApiError(e.status === 503 ? 'setup' : 'down'); setPhase('ask'); } }
+  };
+
+  const finish = async (na = answers, m = mood) => {
+    const my = ++run.current;
     setPhase('thinking'); setCurrent(null);
-    await wait(1900);
-    const r = buildRecommendations(cat, analyze(na, nans, m), { region, history, prefs, live: liveRef.current, asked: na, answers: nans, freeText });
-    setResult(r); setPhase('done');
-    recordShown(r.recs.map(x => x.id)); saveRuns(loadRuns() + 1);
-    // top up live buzz for what is on screen (shown on cards only after a refresh)
-    pullBuzzLive(r.recs.map(x => x.title).filter(t => !liveRef.current?.buzz?.[t.id]), putBuzz).catch(() => {});
+    const s = stateOf(na, m); (prefs.never || []).forEach(g => { s.none.movie.add(g); s.none.tv.add(g); });
+    try {
+      const [p] = await Promise.all([buildPool(s, ctx, 60, 9), wait(1600)]);
+      const r = await recommend(s, p, ctx);
+      if (my !== run.current) return;
+      setPool(p); setResult(r); setPhase('done');
+    } catch (e) { if (my === run.current) { setApiError(e.status === 503 ? 'setup' : 'down'); setPhase('ask'); } }
   };
 
   const answer = async (q, o) => {
@@ -304,184 +153,216 @@ export default function App() {
     setPicked(o.id);
     await wait(200); setLeaving(true);
     await wait(260);
-    const na = [...asked, q], nans = { ...answers, [q.id]: o.id };
-    setAsked(na); setAnswers(nans); setPicked(null); setLeaving(false);
-    const k = strictPool(cat, analyze(na, nans, mood), prefs, history).length;
-    const nq = shouldFinish(na.length, k) ? null : nextQ(na, nans, mood);
-    if (!nq) finish(na, nans, mood); else setCurrent(nq);
+    const na = [...answers, { qid: q.id, oid: o.id }];
+    setAnswers(na); setPicked(null); setLeaving(false);
+    advance(na);
+  };
+
+  // jump back to any earlier question and answer it differently
+  const editAnswer = i => {
+    run.current++;
+    const na = answers.slice(0, i);
+    setAnswers(na); setResult(null); setPicked(null); setLeaving(false);
+    setCurrent(byId[answers[i].qid]); setPhase('ask');
   };
 
   const applyFree = () => {
     if (!freeText.trim()) return;
     const m = parseMood(freeText); setMood(m);
-    if (!m.heard.length && !m.avoided.length) { say('Could not read a mood there — try words like slow, funny, crime, true story'); return; }
-    if (phase === 'done') { finish(asked, answers, m); return; }
-    const k = strictPool(cat, analyze(asked, answers, m), prefs, history).length;
-    if (asked.length && shouldFinish(asked.length, k)) { finish(asked, answers, m); return; }
-    setCurrent(nextQ(asked, answers, m));
+    if (!m.heard.length && !m.avoided.length) { say('Try words like funny, crime, sci-fi, true story, no horror'); return; }
+    if (phase === 'done') finish(answers, m); else if (answers.length >= 2) advance(answers, m);
   };
 
-  const reset = () => { setAsked([]); setAnswers({}); setFreeText(''); setMood(EMPTY_MOOD); setResult(null); setCurrent(null); setPicked(null); setLeaving(false); setPhase('ask'); setRoute('mind'); };
+  const reset = () => { run.current++; setAnswers([]); setFreeText(''); setMood(EMPTY_MOOD); setResult(null); setPool(null); setCurrent(null); setPicked(null); setLeaving(false); setPhase('ask'); setRoute('mind'); setPanel(null); };
 
-  // Card actions animate out first, then land in history.
-  const act = (id, kind) => {
-    setLeavingIds(s => new Set([...s, id]));
+  const act = (rec, kindOf) => {
+    setLeavingIds(s => new Set([...s, rec.id]));
     setTimeout(() => {
-      setHistory(h => new Set([...h, id]));
-      if (kind === 'love') setPrefs(p => { const n = { ...(p || {}), lovedIds: [...new Set([...(p?.lovedIds || []), id])] }; savePrefs(n); return n; });
-      setResult(r => r && { ...r, recs: r.recs.filter(x => x.id !== id) });
-      setLeavingIds(s => { const n = new Set(s); n.delete(id); return n; });
+      setHistory(h => new Set([...h, rec.id]));
+      setMarked(m => [{ key: rec.id, title: rec.title.title, year: rec.title.year, why: kindOf }, ...m.filter(x => x.key !== rec.id)]);
+      setResult(r => r && { ...r, recs: r.recs.filter(x => x.id !== rec.id) });
+      setPlat(p => ({ ...p, recs: p.recs.filter(x => x.id !== rec.id) }));
+      setLeavingIds(s => { const n = new Set(s); n.delete(rec.id); return n; });
     }, REDUCED ? 0 : 380);
-    say(kind === 'love' ? 'Loved — more like this next time' : kind === 'seen' ? 'Marked as seen — it won’t come back' : 'Got it — won’t show that again');
+    say(kindOf === 'love' ? 'Loved — marked as watched' : kindOf === 'seen' ? 'Marked as seen — it won’t come back' : 'Got it — won’t show that again');
   };
 
-  // Platform list is frozen per shuffle so live updates never jump it around.
-  const plat = useMemo(() => route === 'plat' ? topForPlatform(cat, pids, sort, region, history, liveRef.current, seed, recentGems) : [], [route, cat, pids, sort, region, history, seed]); // eslint-disable-line
-  const shuffle = () => { setRecentGems(s => new Set([...s, ...plat.map(r => r.id)])); setSeed(x => (x * 48271) % 2147483647 || 7); setSpin(s => s + 1); };
+  // ---- Platform explorer ----
+  useEffect(() => {
+    if (route !== 'plat') return;
+    let alive = true;
+    const ids = pids.flatMap(id => providers[id] || []);
+    if (!ids.length) { setPlat({ loading: false, recs: [], total: 0 }); return; }
+    setPlat(p => ({ ...p, loading: true }));
+    platformPicks({ providerIds: ids, region: dataRegion, sort, seed, history, kind }, ctx)
+      .then(r => alive && setPlat({ loading: false, ...r }))
+      .catch(e => { if (alive) { setPlat({ loading: false, recs: [], total: 0 }); setApiError(e.status === 503 ? 'setup' : 'down'); } });
+    return () => { alive = false; };
+  }, [route, pids, sort, kind, seed, dataRegion, providers]); // eslint-disable-line
+  useEffect(() => {
+    if (route !== 'plat') return;
+    if (!hot) redditHot().then(setHot).catch(() => setHot({ posts: [] }));
+    if (!press) criticsLatest().then(setPress).catch(() => setPress({ items: [] }));
+  }, [route]); // eslint-disable-line
+  const shuffle = () => { setSeed(x => (x * 48271) % 2147483647 || 7); setSpin(s => s + 1); };
   const tpid = id => setPids(pids.includes(id) ? pids.filter(x => x !== id) : [...pids, id]);
 
   const recs = result?.recs || [];
-  const exact = recs.filter(r => r.strict), close = recs.filter(r => !r.strict);
-  const cardProps = (r, i) => ({ rec: r, index: i, src: imgOf(r.title), leaving: leavingIds.has(r.id), onLove: () => act(r.id, 'love'), onSeen: () => act(r.id, 'seen'), onReject: () => act(r.id, 'reject') });
-  const gemCount = plat.filter(r => r.gem).length;
-
-  const view = showPrefs ? 'prefs' : showSeen ? 'seen' : route;
-  const go = r => { setShowPrefs(false); setShowSeen(false); setRoute(r); };
+  const exact = recs.filter(r => r.strict), close = recs.filter(r => r.strict === false);
+  const cardProps = (r, i) => ({ rec: r, index: i, leaving: leavingIds.has(r.id), onLove: () => act(r, 'love'), onSeen: () => act(r, 'seen'), onReject: () => act(r, 'reject') });
+  const view = panel || route;
+  const go = r => { setPanel(null); setRoute(r); };
   const NAV = [
     { k: 'mind', label: 'Mind-Reader', icon: '◎', on: () => go('mind') },
     { k: 'plat', label: 'By platform', icon: '▦', on: () => go('plat') },
-    { k: 'prefs', label: 'My taste', icon: '♥', on: () => { setShowSeen(false); setShowPrefs(true); } },
-    { k: 'seen', label: 'Watched', icon: '✓', on: () => { setShowPrefs(false); setShowSeen(true); } },
+    { k: 'taste', label: 'My services', icon: '♥', on: () => setPanel('taste') },
+    { k: 'watched', label: 'Watched', icon: '✓', on: () => setPanel('watched') },
   ];
+  const rules = [
+    st.kind === 'movie' && 'Films only', st.kind === 'tv' && 'Series only',
+    st.maxRuntime && `Under ${st.maxRuntime} min`, st.status === 'ended' && 'Finished series',
+    st.minYear && `${st.minYear} or later`, st.langs && `Language: ${st.langs.join('/')}`,
+    st.fame === 'gems' && 'Lesser-known only', st.fame === 'popular' && 'Popular only', st.family && 'Family-safe',
+    ...mood.avoided.map(a => `No ${a}`), ...(prefs.never || []).map(g => `No ${NEVER.find(n => n[1] === g)?.[0]}`),
+    prefs.services?.length && `Only my services`,
+  ].filter(Boolean);
+  const availablePlatforms = PLATFORMS.filter(p => providers[p.id]);
 
   return (
     <div className="app">
       <aside className="side">
         <h1 className="logo">CINE<br /><span className="scout">SCOUT</span></h1>
-        <div className="tag">for cinephiles · art to mainstream</div>
+        <div className="tag">every film · live from the web</div>
         <div className="sec">Diagnose · Explore · You</div>
         <nav className="nav">
           {NAV.map(n => <button key={n.k} className={view === n.k ? 'on' : ''} onClick={n.on}><span className="ico">{n.icon}</span>{n.label}</button>)}
           <button onClick={reset}><span className="ico">↺</span>New session</button>
         </nav>
-        <div className="mut memo">{history.size === 0 ? 'No history yet.' : `Remembers ${history.size} — never repeats.`} {history.size > 0 && <button className="linkbtn" onClick={() => { if (confirm('Forget every title you marked?')) setHistory(new Set()); }}>reset</button>}</div>
+        <div className="mut memo">{history.size === 0 ? 'No history yet.' : `Remembers ${history.size} — never repeats.`}</div>
+        <div className="mut attribution">Film data from TMDB · streaming data via JustWatch · scores and prizes from Wikidata · discussion from Reddit · headlines from critics’ public feeds. This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
       </aside>
-      <HeroReel pool={pool} artPool={artPool} />
+      <HeroReel pool={heroPool} />
       <main className="main">
         <div className="topbar">
-          <div className="mut livebar"><span className="livedot" />{liveMsg} <button className="linkbtn" onClick={() => refreshLive(true)}>Refresh</button></div>
+          <div className="mut livebar"><span className={`livedot ${apiError ? 'off' : ''}`} />{apiError ? 'Live catalogue offline' : 'Live · TMDB, Wikidata, Reddit, critics'}</div>
           <div className="seg" data-on={region}>
             <span className="seg-pill" />
-            {['IN', 'BD'].map(r => <button key={r} className={region === r ? 'on' : ''} onClick={() => { if (r !== region) { setRegion(r); reset(); } }}>{r === 'IN' ? 'India' : 'Bangladesh'}</button>)}
+            {['IN', 'BD'].map(r => <button key={r} className={region === r ? 'on' : ''} onClick={() => { if (r !== region) { setRegion(r); reset(); } }}>{regionName(r)}</button>)}
           </div>
         </div>
+        {apiError && (
+          <div className="banner">
+            {apiError === 'setup'
+              ? <><b>Almost there:</b> the TMDB key is not set on the server yet. Add <code>TMDB_TOKEN</code> in Vercel → Project → Settings → Environment Variables, then redeploy.</>
+              : <><b>Live catalogue unreachable.</b> TMDB did not answer — try again in a minute.</>}
+          </div>
+        )}
+        {regionNote && <div className="banner soft">{regionNote}</div>}
 
         <div className="view" key={view}>
-          {view === 'prefs' ? (
-            <Onboard initial={prefs} onDone={p => { const n = { ...(prefs || {}), ...p }; setPrefs(n); savePrefs(n); setShowPrefs(false); say('Taste saved'); }} />
-          ) : view === 'seen' ? (
-            <SeenList cat={cat} history={history}
-              toggle={id => { const n = new Set(history); n.has(id) ? n.delete(id) : n.add(id); setHistory(n); }}
-              markAll={() => { const n = new Set(history); [...cat].sort((x, y) => y.buzz - x.buzz).slice(0, 20).forEach(t => n.add(t.id)); setHistory(n); }}
-              onDone={() => { setShowSeen(false); reset(); }} />
+          {view === 'taste' ? (
+            <Taste initial={prefs} available={providers} onDone={p => { const n = { ...prefs, ...p }; setPrefs(n); savePrefs(n); setPanel(null); say('Saved'); }} />
+          ) : view === 'watched' ? (
+            <Watched items={marked} onDone={() => setPanel(null)} onRemove={key => { setMarked(m => m.filter(x => x.key !== key)); setHistory(h => { const n = new Set(h); n.delete(key); return n; }); }} />
           ) : view === 'mind' ? (
             <>
               <h2 className="headline">Tonight, what are you?</h2>
-              <div className="mut sub" key={line}>{phase === 'done' ? 'Every pick below was checked against each of your answers.' : line}</div>
+              <div className="mut sub">{phase === 'done' ? 'Every exact match below obeys each of your answers.' : 'A few plain questions. Tap any answer below to change it.'}</div>
               <div className="freebox">
-                <input type="text" value={freeText} onChange={e => setFreeText(e.target.value)} onKeyDown={e => e.key === 'Enter' && applyFree()} placeholder="Or type it: slow and sad, no comedy…" />
+                <input type="text" value={freeText} onChange={e => setFreeText(e.target.value)} onKeyDown={e => e.key === 'Enter' && applyFree()} placeholder="Or type it: a funny crime film, no horror…" />
                 <button onClick={applyFree}>Read this</button>
               </div>
-              {(mood.heard.length > 0 || mood.avoided.length > 0) && (
-                <div className="chips small">
-                  {mood.heard.map(h => <span key={h} className="chip req">{h}</span>)}
-                  {mood.avoided.map(h => <span key={h} className="chip rule">no {h}</span>)}
+              {(answers.length > 0 || mood.heard.length > 0 || rules.length > 0) && (
+                <div className="chips small reqs">
+                  {answers.map((a, i) => {
+                    const q = byId[a.qid]; const o = q.options.find(x => x.id === a.oid);
+                    return <button key={a.qid} className="chip req edit" title="Change this answer" onClick={() => editAnswer(i)}><span className="mut">{q.topic}:</span> {o.label} <i>✎</i></button>;
+                  })}
+                  {mood.heard.map(h => <span key={h} className="chip req">you said “{h}”</span>)}
+                  {rules.filter(r => !answers.length || r.startsWith('No') || r === 'Only my services').map(r => <span key={r} className="chip rule">{r}</span>)}
                 </div>
               )}
               {phase !== 'done' && (
                 <div className="progress">
-                  <div className="ptrack"><div className="pfill" style={{ width: `${Math.min(100, (asked.length / MAX_Q) * 100)}%` }} /></div>
-                  <span className="mut">{phase === 'thinking' ? 'Analyzing' : `${strictNow} title${strictNow === 1 ? '' : 's'} still fit every answer`}</span>
+                  <div className="ptrack"><div className="pfill" style={{ width: `${Math.min(100, (answers.length / MAX_Q) * 100)}%` }} /></div>
+                  <span className="mut">{pool && answers.length >= 3 ? `${pool.strict.length}${pool.exhausted ? '' : '+'} titles fit every answer so far` : `${answers.length} of up to ${MAX_Q}`}</span>
                 </div>
               )}
 
-              {phase === 'thinking' ? <Thinking region={region} n={asked.length} /> : phase === 'done' ? (
-                <>
-                  {(a.groups.length > 0 || rules.length > 0) && (
-                    <div className="chips small reqs">
-                      {a.groups.map(g => <span key={g.q} className="chip req">{g.label}</span>)}
-                      {rules.map(r => <span key={r} className="chip rule">{r}</span>)}
+              {phase === 'thinking' ? <Thinking region={region} n={answers.length} />
+                : phase === 'narrowing' ? <div className="q"><strong className="qtext">Checking what fits so far…</strong><div className="think" /></div>
+                : phase === 'done' ? (
+                  <>
+                    {result?.trace && (
+                      <details className="howto trace">
+                        <summary>How it thought</summary>
+                        <ol className="steps">
+                          <li>Turned your answers into {result.trace.rules.length} strict genre rules{rules.length ? ` and ${rules.length} hard filters` : ''}</li>
+                          <li>Searched the live TMDB catalogue: {result.trace.total.toLocaleString()} titles passed the filters, {result.trace.strict}{result.trace.exhausted ? '' : '+'} of those passed every rule</li>
+                          <li>Checked the best {result.trace.checked} against Rotten Tomatoes / Metacritic ({result.trace.withScores} had scores) and festival or award records ({result.trace.festival} festival winners)</li>
+                          <li>Ranked by combined score; titles you can stream in {regionName(region)}{prefs.services?.length ? ' on your services' : ''} break ties</li>
+                        </ol>
+                      </details>
+                    )}
+                    <h3 className="sechead"><span className="dot ok" />{exact.length ? `${exact.length} exact match${exact.length > 1 ? 'es' : ''}` : 'Nothing matches every answer'}<span className="mut"> · {regionName(region)}</span></h3>
+                    {!exact.length && <p className="mut">Try changing one answer above — the chips are clickable.</p>}
+                    {exact.length > 0 && <div className="grid">{exact.map((r, i) => <Card key={r.id} {...cardProps(r, i)} />)}</div>}
+                    {close.length > 0 && (
+                      <>
+                        <h3 className="sechead"><span className="dot near" />Close matches <span className="mut">· each misses one answer, named on the card</span></h3>
+                        <div className="grid">{close.map((r, i) => <Card key={r.id} {...cardProps(r, exact.length + i)} />)}</div>
+                      </>
+                    )}
+                    <div className="btnrow"><button className="bigbtn" onClick={reset}>New session</button></div>
+                  </>
+                ) : current ? (
+                  <div className={`q ${leaving ? 'out' : ''}`} key={current.id + answers.length}>
+                    <div className="qnum">Question {answers.length + 1} · {current.topic}</div>
+                    <strong className="qtext">{current.wordings[wording[current.id] % current.wordings.length]}</strong>
+                    {visibleOptions(current, st).map((o, i) => (
+                      <button key={o.id} className={`opt ${picked === o.id ? 'picked' : ''} ${picked && picked !== o.id ? 'dim' : ''}`} style={{ '--i': i }} onClick={() => answer(current, o)}>
+                        <span className="key">{'ABCDE'[i]}</span>{o.label}
+                      </button>
+                    ))}
+                    <div className="qfoot mut">
+                      <span>Questions adapt to your answers · skipped when they would not change anything</span>
+                      {answers.length >= 2 && <button className="linkbtn" onClick={() => finish()}>Show my picks now →</button>}
                     </div>
-                  )}
-                  {result?.trace && (
-                    <details className="howto trace">
-                      <summary>How it thought</summary>
-                      <ol className="steps">
-                        <li>Turned {result.trace.requirements.length} answers into strict requirements{rules.length ? ` + ${rules.length} hard rule${rules.length > 1 ? 's' : ''}` : ''}</li>
-                        <li>Started from {result.trace.considered} titles, skipped {result.trace.excludedSeen} you have seen, removed {result.trace.filtered} that broke a hard rule</li>
-                        <li>{result.trace.strict} of {result.trace.passed} matched every answer</li>
-                        <li>Ranked inside each tier by IMDb + critics{result.trace.sources.reviews ? ` + Rotten Tomatoes/Metacritic (${result.trace.sources.reviews} titles live)` : ''}{result.trace.sources.reddit ? ` + Reddit (${result.trace.sources.reddit} live)` : ''}</li>
-                        <li>Streaming in {region} breaks ties</li>
-                      </ol>
-                    </details>
-                  )}
-                  <h3 className="sechead"><span className="dot ok" />{exact.length ? `${exact.length} exact match${exact.length > 1 ? 'es' : ''}` : 'No title matches every answer'}<span className="mut"> · checked for {region}</span></h3>
-                  {exact.length > 0 && <div className="grid">{exact.map((r, i) => <Card key={r.id} {...cardProps(r, i)} />)}</div>}
-                  {close.length > 0 && (
-                    <>
-                      <h3 className="sechead"><span className="dot near" />Close matches <span className="mut">· each misses one answer, shown on the card</span></h3>
-                      <div className="grid">{close.map((r, i) => <Card key={r.id} {...cardProps(r, exact.length + i)} />)}</div>
-                    </>
-                  )}
-                  <div className="btnrow"><button className="bigbtn" onClick={reset}>New session — different mood</button></div>
-                </>
-              ) : current ? (
-                <div className={`q ${leaving ? 'out' : ''}`} key={current.id}>
-                  <div className="qnum">Question {asked.length + 1}</div>
-                  <strong className="qtext">{current.prompt}</strong>
-                  {current.options.map((o, i) => (
-                    <button key={o.id} className={`opt ${picked === o.id ? 'picked' : ''} ${picked && picked !== o.id ? 'dim' : ''}`} style={{ '--i': i }} onClick={() => answer(current, o)}>
-                      <span className="key">{'ABC'[i]}</span>{o.label}
-                    </button>
-                  ))}
-                  <div className="qfoot mut">
-                    <span>Order shifts every run · stops once it is sure</span>
-                    {(asked.length >= 1 || mood.groups.length > 0) && <button className="linkbtn" onClick={() => finish(asked, answers, mood)}>Show my picks now →</button>}
                   </div>
-                </div>
-              ) : <div className="q"><div className="think" /></div>}
+                ) : <div className="q"><div className="think" /></div>}
             </>
           ) : (
             <>
               <h2 className="headline">Best by platform</h2>
-              <div className="mut sub">Only titles you can get on these services in {region === 'IN' ? 'India' : 'Bangladesh'}.</div>
-              {hot && hot.length > 0 && (
+              <div className="mut sub">Live from each service’s current catalogue in {regionName(region)}.</div>
+              {press?.items?.length > 0 && (
                 <div className="hotwrap">
-                  <div className="mut label"><span className="livedot" />Hot on Reddit right now</div>
-                  <div className="hotrow">
-                    {hot.map((h, i) => {
-                      const t = cat.find(x => x.id === h.id);
-                      if (!t) return null;
-                      const inner = (<><img src={imgOf(t)} alt={t.title} loading="lazy" /><span>{t.title}</span><small>r/{h.sub} · {h.score + h.comments}</small></>);
-                      return h.url
-                        ? <a key={h.id} className="hotcard" style={{ '--i': i }} href={h.url} target="_blank" rel="noreferrer">{inner}</a>
-                        : <div key={h.id} className="hotcard" style={{ '--i': i }}>{inner}</div>;
-                    })}
-                  </div>
+                  <div className="mut label"><span className="livedot" />Latest from critics, festivals and film blogs</div>
+                  <div className="presslist">{press.items.slice(0, 8).map((i, n) => <a key={i.url} href={i.url} target="_blank" rel="noreferrer" style={{ '--i': n }}><b>{i.source}</b>{i.title}</a>)}</div>
                 </div>
               )}
-              <div className="chips">{PLATFORMS.map(p => <button key={p.id} className={`chip ${pids.includes(p.id) ? 'on' : ''}`} onClick={() => tpid(p.id)}>{p.name}</button>)}</div>
+              {hot?.posts?.length > 0 && (
+                <div className="hotwrap">
+                  <div className="mut label"><span className="livedot" />Top on Reddit this week{hot.source === 'archive' ? ' (archive)' : ''}</div>
+                  <div className="presslist">{hot.posts.slice(0, 6).map((p, n) => <a key={p.url} href={p.url} target="_blank" rel="noreferrer" style={{ '--i': n }}><b>r/{p.sub}</b>{p.title} <span className="mut">· {p.score + p.comments}</span></a>)}</div>
+                </div>
+              )}
+              <div className="chips">{availablePlatforms.map(p => <button key={p.id} className={`chip ${pids.includes(p.id) ? 'on' : ''}`} onClick={() => tpid(p.id)}>{p.name}</button>)}</div>
+              {!availablePlatforms.length && !apiError && <p className="mut">Loading services in {regionName(region)}…</p>}
               <div className="sortrow">
                 <div className="seg tabs">
-                  {[['gems', '✦ Hidden gems'], ['best', 'Best overall'], ['critics', 'Critics first'], ['buzz', 'Most buzz']].map(([k, l]) => <button key={k} className={sort === k ? 'on' : ''} onClick={() => setSort(k)}>{l}</button>)}
+                  {[['gems', '✦ Hidden gems'], ['best', 'Best rated'], ['new', 'New & good'], ['buzz', 'Trending']].map(([k, l]) => <button key={k} className={sort === k ? 'on' : ''} onClick={() => setSort(k)}>{l}</button>)}
+                </div>
+                <div className="seg tabs">
+                  {[['movie', 'Films'], ['tv', 'Series']].map(([k, l]) => <button key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>{l}</button>)}
                 </div>
                 {sort === 'gems' && <button className="shuffle" onClick={shuffle}><span className="sic" style={{ transform: `rotate(${spin * 360}deg)` }}>⟳</span> Shuffle gems</button>}
               </div>
-              {sort === 'gems' && plat.length > 0 && gemCount < plat.length && (
-                <div className="mut note">Only {gemCount} true hidden gem{gemCount === 1 ? '' : 's'} on {pids.length > 1 ? 'these services' : 'this service'} in {region} — topped up with lesser-known strong titles.</div>
+              {plat.total > 0 && <div className="mut note">{sort === 'gems' ? `Drawing at random from ${plat.total.toLocaleString()} highly rated, little-seen titles` : `${plat.total.toLocaleString()} titles on this shelf`}</div>}
+              {plat.loading ? <div className="q"><strong className="qtext">Reading the live catalogue…</strong><div className="think" /></div> : (
+                <div className="grid" key={sort + seed + pids.join() + region + kind}>{plat.recs.map((r, i) => <Card key={r.id} {...cardProps(r, i)} />)}</div>
               )}
-              <div className="grid" key={sort + seed + pids.join() + region}>{plat.map((r, i) => <Card key={r.id} {...cardProps(r, i)} />)}</div>
-              {plat.length === 0 && <p className="mut empty">{pids.length ? `Nothing on ${pids.map(p => PLATFORMS.find(x => x.id === p).name).join(' + ')} in ${region} yet — try another service.` : 'Turn on at least one platform.'}</p>}
+              {!plat.loading && !plat.recs.length && availablePlatforms.length > 0 && <p className="mut empty">{pids.length ? 'Nothing here yet — try another service or shelf.' : 'Turn on at least one service.'}</p>}
             </>
           )}
         </div>

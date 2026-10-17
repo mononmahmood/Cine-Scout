@@ -242,3 +242,33 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
   .hero-layer { transition: opacity .8s ease !important; }
 }
+
+/* ---------- live edition ---------- */
+.banner { margin-top: 14px; padding: 11px 14px; border-radius: 12px; font-size: 13px; background: rgba(245,165,36,.1); border: 1px solid rgba(245,165,36,.4); color: #fcd9a0; max-width: 760px; animation: rise .4s var(--ease) both; }
+.banner.soft { background: rgba(125,211,252,.07); border-color: rgba(125,211,252,.3); color: #bfe6fb; }
+.banner code { background: rgba(0,0,0,.35); padding: 1px 6px; border-radius: 6px; }
+.livedot.off { background: var(--org); box-shadow: 0 0 8px rgba(245,165,36,.8); }
+.chip.edit { cursor: pointer; }
+.chips.small .chip.edit { cursor: pointer; }
+.chip.edit i { font-style: normal; opacity: .5; margin-left: 4px; transition: opacity .2s; }
+.chip.edit:hover { border-color: rgba(196,181,253,.8); }
+.chip.edit:hover i { opacity: 1; }
+.chip .mut { color: rgba(196,181,253,.6); }
+.ribbon.fest { left: auto; right: 10px; background: linear-gradient(135deg, #c4b5fd, #8b5cf6); color: #120a24; }
+.ribbon + .ribbon.fest { top: 10px; }
+.buzz { margin: 9px 2px 0; display: grid; gap: 5px; }
+.buzzline { font-size: 11.5px; color: var(--sky); line-height: 1.4; }
+.buzzline a { color: var(--sky); text-decoration: none; border-bottom: 1px dotted rgba(125,211,252,.4); }
+.buzzline a:hover { color: #fff; }
+.spin { display: inline-block; width: 9px; height: 9px; border-radius: 99px; border: 1.5px solid rgba(255,255,255,.2); border-top-color: var(--sky); margin-right: 6px; vertical-align: -1px; animation: rot .8s linear infinite; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.critics { display: grid; gap: 3px; }
+.critics a { font-size: 11.5px; color: #d4d4d8; text-decoration: none; line-height: 1.35; animation: fadeIn .5s ease both; }
+.critics a b, .presslist a b { color: var(--gold); font-weight: 700; margin-right: 6px; }
+.critics a:hover { color: #fff; }
+.presslist { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; }
+.presslist a { display: block; font-size: 12.5px; line-height: 1.4; color: var(--txt); text-decoration: none; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; backdrop-filter: blur(14px); animation: enter .5s var(--ease) both; animation-delay: calc(var(--i) * .04s); transition: border-color .25s, transform .25s var(--ease); }
+.presslist a:hover { border-color: var(--line2); transform: translateY(-2px); }
+.attribution { font-size: 10px; line-height: 1.45; margin: 18px 10px 0; opacity: .7; }
+.small { font-size: 12px; }
+.seenrow { justify-content: space-between; align-items: center; }

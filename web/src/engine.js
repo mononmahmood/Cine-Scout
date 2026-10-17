@@ -1,314 +1,374 @@
-// Cine Scout thinker.
-// Every answer that names a mood is a strict requirement: a title must share
-// at least one tag with each of those answers. Practical answers (time, era,
-// "no tension", "polished only"…) are hard filters that never relax.
-// Quality blends every source we hold — IMDb, critics, Rotten Tomatoes and
-// Metacritic (live from Wikidata), live Reddit — and only orders titles
-// inside the same match tier, so a famous film can never outrank a better fit.
-import { verify } from './data.js';
+// Cine Scout thinker, live edition.
+// Answers become strict rules: hard filters go to TMDB's discover query, the
+// rest are checked on every returned title. Nothing that breaks an answer is
+// ever shown as a match. Ranking blends TMDB audience score, Rotten Tomatoes,
+// Metacritic and festival/award record (Wikidata); Reddit and critics' feeds
+// are shown per title as they arrive.
+import { QUESTIONS, byId, G } from './questions.js';
+import { discover, details, acclaim, IMG } from './live.js';
 
-const optionOf = (q, answers) => q.options.find(x => x.id === (answers || {})[q.id]);
+const KINDS = st => (st.kind === 'both' ? ['movie', 'tv'] : [st.kind || 'movie']);
+const thisYear = new Date().getFullYear();
 
-// Questions that own a signal: their answer wins over side effects of others.
-const OWNER = { thrill: 'tension', brain: 'battery', arthouse: 'depth' };
-const MAXED = ['thrill', 'brain', 'laugh', 'love'];
+// ---- answers → state ------------------------------------------------------------
 
-// Plain-words box. Each mood word becomes its own requirement; "no X" / "not X"
-// / "without X" becomes a hard exclusion instead.
+export function stateOf(answers, mood = EMPTY_MOOD) {
+  const st = { kind: 'both', groups: [], none: { movie: new Set(), tv: new Set() }, answered: [] };
+  for (const { qid, oid } of answers) {
+    const q = byId[qid]; const o = q?.options.find(x => x.id === oid);
+    if (!o) continue;
+    st.answered.push({ qid, label: o.label, topic: q.topic });
+    Object.assign(st, o.set || {});
+    if (o.any) st.groups.push({ key: qid, label: o.label, ids: o.any });
+    for (const k of ['movie', 'tv']) (o.none?.[k] || []).forEach(g => st.none[k].add(g));
+  }
+  for (const g of mood.groups) st.groups.push(g);
+  for (const k of ['movie', 'tv']) mood.none[k].forEach(g => st.none[k].add(g));
+  // a rule that has no genres for a format rules that format out
+  if (st.kind === 'both') {
+    const tvOk = st.groups.every(g => g.ids.tv?.length), movieOk = st.groups.every(g => g.ids.movie?.length);
+    if (!tvOk && movieOk) st.kind = 'movie';
+    if (!movieOk && tvOk) st.kind = 'tv';
+  }
+  return st;
+}
+
+export function visibleOptions(q, st) {
+  return q.options.filter(o => !(o.hideFor || []).includes(st.kind));
+}
+
+// ---- typed mood -----------------------------------------------------------------
+
 const LEX = [
-  { name: 'slow', re: /\b(slow|quiet|calm|meditat\w*|breath\w*|gentle)\b/, tags: ['slow-cinema', 'slow-burn'], core: ['slow-cinema'] },
-  { name: 'twisty', re: /\b(twist\w*|confus\w*|mind\w*|complex|puzzl\w*)\b/, tags: ['twist', 'psych-fracture'], core: ['psych-fracture'] },
-  { name: 'comedy', re: /\b(laugh\w*|funny|comed\w*|silly|hilarious|lighthearted)\b/, tags: ['light-comedy', 'dark-comedy'], core: ['light-comedy', 'dark-comedy'] },
-  { name: 'dark', re: /\b(dark|bleak|disturb\w*|grim|brutal)\b/, tags: ['moral-ambiguity', 'psych-fracture'], core: ['psych-fracture'] },
-  { name: 'emotional', re: /\b(love|romant\w*|romance|heart\w*|sad|cry|crying|emotion\w*|tear\w*)\b/, tags: ['emotional', 'romance-light'], core: ['romance-light'] },
-  { name: 'tense', re: /\b(thrill\w*|action|tense|tension|edge|chase|fight\w*|violen\w*)\b/, tags: ['adrenaline'], core: ['adrenaline'] },
-  { name: 'eerie', re: /\b(horror|scary|ghost\w*|folk|creepy|eerie)\b/, tags: ['folk-horror', 'surreal'], core: ['folk-horror'] },
-  { name: 'far-out', re: /\b(sci-?fi|science|space|future\w*|fantasy|dream\w*|alien\w*)\b/, tags: ['sci-escape', 'lore'], core: ['sci-escape'] },
-  { name: 'true story', re: /\b(true|real|based|biopic|documentary)\b/, tags: ['true-story', 'true-feel'], core: ['true-story'] },
-  { name: 'art-house', re: /\b(art-?house|festival|criterion|satyajit|auteur|arthouse)\b/, tags: ['art-house', 'world-cinema', 'slow-cinema'], core: ['art-house'] },
-  { name: 'crime', re: /\b(crime|murder\w*|heist\w*|mafia|detective\w*|gangster\w*|cops?)\b/, tags: ['crime-world'], core: ['crime-world'] },
-  { name: 'uplifting', re: /\b(hope\w*|uplift\w*|feel-?good|warm|happy|wholesome)\b/, tags: ['hopeful', 'feel-good'], core: [] },
+  { name: 'funny', re: /\b(laugh\w*|funny|comed\w*|silly|hilarious|lighthearted)\b/, any: { movie: [G.comedy], tv: [G.comedy] } },
+  { name: 'scary', re: /\b(horror|scary|ghost\w*|creepy|haunt\w*)\b/, any: { movie: [G.horror], tv: [] } },
+  { name: 'romantic', re: /\b(love|romant\w*|romance)\b/, any: { movie: [G.romance], tv: [] } },
+  { name: 'emotional', re: /\b(sad|cry|crying|emotion\w*|tear\w*|moving)\b/, any: { movie: [G.drama], tv: [G.drama] } },
+  { name: 'suspense', re: /\b(thrill\w*|suspense\w*|tense|tension|edge)\b/, any: { movie: [G.thriller, G.mystery], tv: [G.mystery, G.crime] } },
+  { name: 'action', re: /\b(action|fight\w*|chase)\b/, any: { movie: [G.action], tv: [G.actionAdventure] } },
+  { name: 'crime', re: /\b(crime|murder\w*|heist\w*|mafia|detective\w*|gangster\w*|cops?)\b/, any: { movie: [G.crime], tv: [G.crime] } },
+  { name: 'mystery', re: /\b(mystery|mysteries|whodunit|puzzle\w*)\b/, any: { movie: [G.mystery], tv: [G.mystery] } },
+  { name: 'sci-fi', re: /\b(sci-?fi|science fiction|space|future\w*|alien\w*)\b/, any: { movie: [G.scifi], tv: [G.scifiFantasy] } },
+  { name: 'fantasy', re: /\b(fantasy|magic\w*|myth\w*)\b/, any: { movie: [G.fantasy], tv: [G.scifiFantasy] } },
+  { name: 'true story', re: /\b(true story|real events|biopic|historical|history)\b/, any: { movie: [G.history], tv: [G.warPolitics] } },
+  { name: 'documentary', re: /\b(documentar\w*|docu\w*)\b/, any: { movie: [G.documentary], tv: [G.documentary] } },
+  { name: 'animated', re: /\b(anim\w*|cartoon\w*|anime)\b/, any: { movie: [G.animation], tv: [G.animation] } },
+  { name: 'war', re: /\b(war|soldier\w*|battle\w*)\b/, any: { movie: [G.war], tv: [G.warPolitics] } },
+  { name: 'family', re: /\b(family|kids|children)\b/, any: { movie: [G.family], tv: [G.family, G.kids] } },
 ];
-const NEG = /\b(no|not|without|zero|avoid|skip|never|nothing)\b(\s+\w+){0,2}\s*$/;
+const NEG = /\b(no|not|without|zero|avoid|skip|never|nothing|hate)\b(\s+\w+){0,2}\s*$/;
+export const EMPTY_MOOD = { groups: [], none: { movie: new Set(), tv: new Set() }, heard: [], avoided: [] };
 
 export function parseMood(text) {
   const t = (text || '').toLowerCase();
-  const groups = [], avoid = new Set(), heard = [], avoided = [];
+  const out = { groups: [], none: { movie: new Set(), tv: new Set() }, heard: [], avoided: [] };
   for (const L of LEX) {
-    const m = t.match(new RegExp(L.re.source, 'g'));
-    if (!m) continue;
-    let positive = false, negative = false;
-    let from = 0;
-    for (const word of m) {
-      const i = t.indexOf(word, from); from = i + word.length;
-      if (NEG.test(t.slice(Math.max(0, i - 24), i))) negative = true; else positive = true;
-    }
-    if (negative) { L.core.forEach(x => avoid.add(x)); avoided.push(L.name); }
-    if (positive && !negative) { groups.push({ q: 'free:' + L.name, label: `you said “${L.name}”`, tags: L.tags }); heard.push(L.name); }
+    const re = new RegExp(L.re.source, 'g'); let m, pos = false, neg = false;
+    while ((m = re.exec(t))) { if (NEG.test(t.slice(Math.max(0, m.index - 24), m.index))) neg = true; else pos = true; }
+    if (neg) { for (const k of ['movie', 'tv']) L.any[k].forEach(g => out.none[k].add(g)); out.avoided.push(L.name); }
+    else if (pos) { out.groups.push({ key: 'free:' + L.name, label: `you said “${L.name}”`, ids: L.any }); out.heard.push(L.name); }
   }
-  return { groups, avoid, heard, avoided };
-}
-export const EMPTY_MOOD = { groups: [], avoid: new Set(), heard: [], avoided: [] };
-
-// Everything the answers mean, in one place.
-export function analyze(asked, answers, mood = EMPTY_MOOD) {
-  const sig = {}, groups = [];
-  asked.forEach(q => {
-    const o = optionOf(q, answers); if (!o) return;
-    if (o.tags?.length) groups.push({ q: q.id, label: o.label, tags: o.tags });
-    for (const [k, v] of Object.entries(o.signal || {})) {
-      sig[k] = MAXED.includes(k) ? Math.max(sig[k] ?? -1, v) : v;
-    }
-  });
-  for (const [k, qid] of Object.entries(OWNER)) {
-    const q = asked.find(x => x.id === qid); const o = q && optionOf(q, answers);
-    if (o && o.signal?.[k] !== undefined) sig[k] = o.signal[k];
-  }
-  groups.push(...mood.groups);
-  const tags = new Set(groups.flatMap(g => g.tags));
-  return { sig, groups, tags, avoid: mood.avoid };
-}
-
-const famous = t => (t.baseBuzz ?? t.buzz) >= 88 || (t.imdb >= 8.7 && (t.baseBuzz ?? t.buzz) >= 84);
-
-// Hard filters: never relaxed. Returns the reason a title is out, or null.
-export function hardReason(t, sig, avoid, prefs) {
-  if (avoid?.size && t.tags.some(x => avoid.has(x))) return 'avoid';
-  if (sig.thrill === 0 && t.tags.includes('adrenaline')) return 'tension';
-  if (sig.brain === 0 && t.tags.includes('psych-fracture')) return 'heavy';
-  if (sig.arthouse === -1 && (t.tags.includes('art-house') || t.tags.includes('slow-cinema'))) return 'arthouse';
-  if (sig.clean && t.tags.includes('psych-fracture')) return 'group';
-  if (sig.safeOnly && !(t.imdb >= 8.0 && (t.baseBuzz ?? t.buzz) >= 75)) return 'legend';
-  // "show me what I missed": only under-seen titles — the catalogue's gem flag or low popularity
-  if (sig.gemBoost && (famous(t) || !(t.gem || (t.baseBuzz ?? t.buzz) <= 72))) return 'famous';
-  if (sig.noSeries && t.kind === 'tv') return 'series';
-  if (sig.onlySeries && t.kind !== 'tv') return 'film';
-  if (sig.maxRuntime && t.kind === 'movie' && t.runtime > sig.maxRuntime) return 'runtime';
-  if (sig.minYear && t.year < sig.minYear) return 'era';
-  if (prefs) {
-    if (prefs.hideFamous && famous(t) && !sig.safeOnly) return 'famous';
-    if (prefs.noSeries && t.kind === 'tv') return 'series';
-    if (prefs.maxRuntime && t.kind === 'movie' && t.runtime > prefs.maxRuntime) return 'runtime';
-    if (prefs.langs?.length && !t.langs.some(l => prefs.langs.includes(l)) && !t.langs.includes('English')) return 'language';
-    const low = t.title.toLowerCase();
-    if (prefs.hatedTags?.some(h => low.includes(h) || t.tags.some(x => x.includes(h)))) return 'never';
-  }
-  return null;
-}
-
-const hits = (t, g) => g.tags.some(x => t.tags.includes(x));
-export function strictPool(cat, a, prefs, history) {
-  return cat.filter(t => !history?.has(t.id) && !hardReason(t, a.sig, a.avoid, prefs) && a.groups.every(g => hits(t, g)));
-}
-
-// Next question = the one that splits the remaining strict matches most evenly
-// (so every answer genuinely narrows the shelf), random among the best three.
-export function pickNext(allQs, asked, answers, mood, cat, prefs, history) {
-  const askedIds = new Set(asked.map(q => q.id));
-  const scored = [];
-  for (const q of allQs) {
-    if (askedIds.has(q.id)) continue;
-    const counts = q.options.map(o => strictPool(cat, analyze([...asked, q], { ...answers, [q.id]: o.id }, mood), prefs, history).length);
-    const total = counts.reduce((x, y) => x + y, 0);
-    const live = counts.filter(c => c > 0).length;
-    if (live < 2 || !total) continue;
-    scored.push({ q, bal: (1 - Math.max(...counts) / total) + live * 0.05 });
-  }
-  if (!scored.length) return null;
-  scored.sort((x, y) => y.bal - x.bal);
-  const top = scored.slice(0, 3);
-  return top[Math.floor(Math.random() * top.length)].q;
-}
-
-export const MAX_Q = 7;
-export function shouldFinish(n, strictCount) {
-  if (n >= MAX_Q) return true;
-  if (n >= 1 && strictCount <= 5) return true;
-  if (n >= 2 && strictCount <= 10) return true;
-  if (n >= 4 && strictCount <= 18) return true;
-  return false;
-}
-
-export function coopLine(asked, answers) {
-  if (!asked.length) return 'Tell me tonight in one tap — or type it below.';
-  const last = asked[asked.length - 1];
-  const o = optionOf(last, answers);
-  const ack = (last.follow && o && last.follow[o.id]) || 'Noted.';
-  return `${ack} Digging one layer deeper.`;
-}
-
-// ---- sources ---------------------------------------------------------------
-
-function withLive(catalogue, live) {
-  return catalogue.map(t => {
-    const b = live?.buzz?.[t.id];
-    const a = live?.awards?.byId?.[t.id];
-    const rv = live?.awards?.reviews?.[t.id] || {};
-    let buzz = t.buzz;
-    if (b && b.n > 0) buzz = Math.min(97, Math.max(t.buzz, 55 + b.n * 5));
-    return { ...t, baseBuzz: t.buzz, buzz, reddit: b ? b.n : null, rt: rv.rt ?? null, mc: rv.mc ?? null, awards: a !== undefined ? a : (t.awards || []) };
-  });
-}
-
-// Weighted mean of every score we actually have for this title.
-export function quality(t) {
-  const parts = [[t.imdb / 10, 0.35], [t.critic / 100, 0.2], [t.buzz / 100, 0.15]];
-  if (t.rt != null) parts.push([t.rt / 100, 0.15]);
-  if (t.mc != null) parts.push([t.mc / 100, 0.15]);
-  const w = parts.reduce((s, p) => s + p[1], 0);
-  return parts.reduce((s, p) => s + p[0] * p[1], 0) / w;
-}
-
-export function sourceBars(t) {
-  const out = [{ k: 'IMDb', v: t.imdb * 10, txt: t.imdb.toFixed(1) }, { k: 'Critics', v: t.critic, txt: String(t.critic) }];
-  if (t.rt != null) out.push({ k: 'Rotten T.', v: t.rt, txt: t.rt + '%', live: true });
-  if (t.mc != null) out.push({ k: 'Metacritic', v: t.mc, txt: String(t.mc), live: true });
-  out.push({ k: 'Buzz', v: t.buzz, txt: t.reddit != null ? `${t.reddit} posts` : String(t.buzz), live: t.reddit != null });
   return out;
 }
 
-// ---- Mind-Reader results -----------------------------------------------------
+// ---- strict checks --------------------------------------------------------------
 
-export function buildRecommendations(catalogue, a, { region, history, prefs, live, asked, answers, freeText }) {
-  const cat = withLive(catalogue, live);
-  const shown = loadShown();
-  const unseen = cat.filter(t => !history.has(t.id));
-  const out = {}; const passed = [];
-  for (const t of unseen) {
-    const r = hardReason(t, a.sig, a.avoid, prefs);
-    if (r) out[r] = (out[r] || 0) + 1; else passed.push(t);
-  }
-  const G = a.groups.length;
-  const rows = passed.map(t => {
-    const ok = a.groups.map(g => hits(t, g));
-    const matched = ok.filter(Boolean).length;
-    const density = a.tags.size ? t.tags.filter(x => a.tags.has(x)).length / Math.max(t.tags.length, 1) : 0;
-    let s = quality(t) * 0.6 + density * 0.25;
-    if (verify(t, region).blocked === false) s += 0.1;
-    if (a.sig.gemBoost && t.gem && !famous(t)) s += 0.08;
-    if (!a.sig.safeOnly && famous(t)) s -= 0.05;
-    if (prefs?.lovedTags?.some(x => t.title.toLowerCase().includes(x) || t.tags.includes(x))) s += 0.04;
-    if (prefs?.lovedIds?.length) {
-      const lovedTags = new Set(catalogue.filter(x => prefs.lovedIds.includes(x.id)).flatMap(x => x.tags));
-      s += Math.min(0.05, t.tags.filter(x => lovedTags.has(x)).length * 0.015);
+const FAME = {
+  movie: { popular: { min: 3000 }, gems: { min: 80, max: 2500, rating: 7.0 }, base: { min: 150 } },
+  tv: { popular: { min: 800 }, gems: { min: 40, max: 700, rating: 7.2 }, base: { min: 60 } },
+};
+// Regional-language titles get far fewer TMDB votes, so vote bands shrink for them.
+const fameOf = (kind, st) => {
+  const f = { ...FAME[kind].base, ...(st.fame ? FAME[kind][st.fame] : {}) };
+  if (st.langs && !st.langs.includes('en')) { f.min = Math.max(10, Math.round(f.min / 6)); if (f.max) f.max = Math.round(f.max / 6); }
+  return f;
+};
+
+export function failures(t, st) {
+  const f = [];
+  for (const g of st.groups) if (!(g.ids[t.kind] || []).some(id => t.genres.includes(id))) f.push(g.label);
+  return f;
+}
+export function breaksHard(t, st) {
+  if (t.genres.some(g => st.none[t.kind].has(g))) return true;
+  // series have no age ratings in TMDB's search, so family-safe means a family, kids or animation series
+  if (st.family && t.kind === 'tv' && ![G.family, G.kids, G.animation].some(g => t.genres.includes(g))) return true;
+  if (st.langs && !st.langs.includes(t.lang)) return true;
+  if (st.minYear && t.year && t.year < st.minYear) return true;
+  const fm = fameOf(t.kind, st);
+  if (t.votes < fm.min || (fm.max && t.votes > fm.max)) return true;
+  return false;
+}
+
+// ---- discover -------------------------------------------------------------------
+
+export function discoverParams(kind, st, ctx) {
+  const fm = fameOf(kind, st);
+  const p = {
+    include_adult: 'false', include_video: 'false', language: 'en-US', watch_region: ctx.dataRegion || ctx.region,
+    sort_by: st.fame === 'popular' ? 'vote_count.desc' : 'vote_average.desc',
+    'vote_count.gte': fm.min, 'vote_average.gte': fm.rating || 6.5,
+  };
+  if (fm.max) p['vote_count.lte'] = fm.max;
+  // push the narrowest rule to the server, the rest are checked client-side
+  const g = [...st.groups].filter(x => x.ids[kind]?.length).sort((a, b) => a.ids[kind].length - b.ids[kind].length)[0];
+  if (g) p.with_genres = g.ids[kind].join('|');
+  if (st.none[kind].size) p.without_genres = [...st.none[kind]].join(',');
+  if (st.langs?.length === 1) p.with_original_language = st.langs[0];
+  if (st.minYear) p[kind === 'movie' ? 'primary_release_date.gte' : 'first_air_date.gte'] = `${st.minYear}-01-01`;
+  if (kind === 'movie') {
+    p['primary_release_date.lte'] = new Date().toISOString().slice(0, 10);
+    if (st.maxRuntime) { p['with_runtime.lte'] = st.maxRuntime; p['with_runtime.gte'] = 40; }
+    if (st.family) { p.certification_country = 'US'; p['certification.lte'] = 'PG-13'; }
+  } else if (st.status === 'ended') p.with_status = '3|4';
+  if (ctx.services?.length) { p.with_watch_providers = ctx.services.join('|'); p.with_watch_monetization_types = 'flatrate|free|ads'; }
+  return p;
+}
+
+export function normalize(r, kind) {
+  const date = r.release_date || r.first_air_date || '';
+  return {
+    key: `${kind}:${r.id}`, id: r.id, kind,
+    title: r.title || r.name, original: r.original_title || r.original_name,
+    year: +date.slice(0, 4) || null, genres: r.genre_ids || (r.genres || []).map(g => g.id),
+    lang: r.original_language, vote: r.vote_average || 0, votes: r.vote_count || 0, popularity: r.popularity || 0,
+    poster: IMG(r.poster_path), backdrop: IMG(r.backdrop_path, 'w1280'), overview: r.overview || '',
+  };
+}
+
+// Pages through TMDB until enough titles pass every rule (or the catalogue runs out).
+export async function buildPool(st, ctx, want = 60, maxPages = 9) {
+  const strict = [], near = [], seen = new Set();
+  let total = 0, exhausted = true;
+  const kinds = KINDS(st);
+  for (const kind of kinds) {
+    const params = discoverParams(kind, st, ctx);
+    let page = 1, pages = 1, kindStrict = 0;
+    while (page <= Math.min(pages, maxPages)) {
+      const nums = [page, page + 1, page + 2].filter(n => n === 1 || n <= Math.min(pages, maxPages));
+      const batch = await Promise.all(nums.map(n => discover(kind, { ...params, page: n })));
+      for (const [i, d] of batch.entries()) {
+        pages = Math.min(d.total_pages || 1, 500);
+        if (nums[i] === 1) total += d.total_results || 0;
+        for (const r of d.results || []) {
+          const t = normalize(r, kind);
+          if (seen.has(t.key) || ctx.history.has(t.key) || breaksHard(t, st)) continue;
+          seen.add(t.key);
+          const f = failures(t, st);
+          if (!f.length) { strict.push(t); kindStrict++; } else if (f.length === 1) near.push({ ...t, missed: f });
+        }
+      }
+      page += nums.length;
+      if (kindStrict >= want / kinds.length) break;
     }
-    s -= Math.min(0.1, 0.025 * (shown[t.id] || 0));
-    return { t, s, matched, missed: a.groups.filter((g, i) => !ok[i]).map(g => g.label) };
+    if (page <= pages) exhausted = false;
+  }
+  return { strict, near, total, exhausted };
+}
+
+// ---- adaptive questions ---------------------------------------------------------
+
+function optionKeeps(o, t, st) {
+  const s = o.set || {};
+  if (s.kind && s.kind !== 'both' && t.kind !== s.kind) return false;
+  if (s.minYear && t.year < s.minYear) return false;
+  if (s.langs && !s.langs.includes(t.lang)) return false;
+  if (s.fame) { const fm = fameOf(t.kind, { ...st, fame: s.fame }); if (t.votes < (fm.min || 0) || (fm.max && t.votes > fm.max)) return false; }
+  if (o.any && !(o.any[t.kind] || []).some(id => t.genres.includes(id))) return false;
+  if (o.none && (o.none[t.kind] || []).some(id => t.genres.includes(id))) return false;
+  return true;
+}
+
+// Core and practical questions come first, in order. After that the next
+// question is the one whose answers would narrow the current matches most —
+// a question that would not change anything is skipped entirely.
+export function nextQuestion(answers, st, pool) {
+  const done = new Set(answers.map(a => a.qid));
+  const open = QUESTIONS.filter(q => !done.has(q.id) && (!q.when || q.when(st)) && visibleOptions(q, st).length > 1);
+  const fixed = open.filter(q => q.core || q.practical).sort((a, b) => (a.core || a.practical) - (b.core || b.practical));
+  if (fixed.length) return fixed[0];
+  const items = pool?.strict || [];
+  if (!items.length) return null;
+  const scored = open.map(q => {
+    const opts = visibleOptions(q, st);
+    const keep = opts.map(o => items.filter(t => optionKeeps(o, t, st)).length / items.length);
+    const effective = keep.filter(k => k < 0.98).length;
+    return { q, gain: keep.reduce((s, k) => s + (1 - k), 0) / opts.length, effective };
+  }).filter(x => x.effective >= 1);
+  if (!scored.length) return null;
+  scored.sort((a, b) => b.gain - a.gain);
+  const top = scored.slice(0, 2);
+  return top[Math.floor(Math.random() * top.length)].q;
+}
+
+export const MAX_Q = 8;
+export function shouldStop(answers, pool) {
+  const n = answers.length;
+  if (n >= MAX_Q) return true;
+  if (n >= 4 && pool.strict.length <= 12 && pool.exhausted) return true;
+  return false;
+}
+
+// ---- ranking --------------------------------------------------------------------
+
+const bayes = (t, C = 6.9) => { const m = t.kind === 'movie' ? 800 : 250; return (t.votes * t.vote + m * C) / (t.votes + m); };
+
+export function watchInfo(d, region, ctx) {
+  // TMDB has no data for some regions (e.g. Bangladesh); ctx.dataRegion is the stand-in
+  const w = d?.['watch/providers']?.results?.[ctx.dataRegion || region];
+  const names = arr => [...new Set((arr || []).map(p => p.provider_name))];
+  const stream = names([...(w?.flatrate || []), ...(w?.free || []), ...(w?.ads || [])]);
+  const rent = names([...(w?.rent || []), ...(w?.buy || [])]);
+  const mine = ctx.serviceNames?.length ? stream.filter(n => ctx.serviceNames.some(s => n.toLowerCase().includes(s.toLowerCase().split(/[ +]/)[0]))) : stream;
+  const link = w?.link || null;
+  const where = region === 'IN' ? 'India' : region === 'BD' ? 'Bangladesh' : region;
+  const proxy = ctx.dataRegion && ctx.dataRegion !== region ? ' (India listing — check locally)' : '';
+  const name = d?.title || d?.name || 'the title';
+  if (stream.length) return {
+    blocked: false, badge: `Stream on ${stream.slice(0, 2).join(' · ')}${proxy}`, mine: mine.length > 0, fallback: null,
+    steps: [`Open ${stream[0]} (signed in to the ${where} store)`, `Search “${name}”`, 'Play'],
+    links: link ? [{ label: 'All options in ' + where, url: link }] : [],
+  };
+  if (rent.length) return {
+    blocked: true, badge: `Rent or buy · ${rent.slice(0, 2).join(' · ')}`, mine: false,
+    fallback: `Not on a subscription in ${where} right now.`,
+    steps: [`Open ${rent[0]}`, `Search “${name}” → Rent`], links: link ? [{ label: 'All options in ' + where, url: link }] : [],
+  };
+  return {
+    blocked: true, badge: `Not streaming in ${where}`, mine: false,
+    fallback: ctx.regionNote || `No legal streaming option listed for ${where} yet.`,
+    steps: ['Not listed on any service in your region right now', 'Availability changes often — check back later'], links: [],
+  };
+}
+
+const fmtVotes = n => (n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k votes' : n + ' votes');
+export function bars(t, a) {
+  const out = [{ k: 'Audience', v: t.vote * 10, txt: `${t.vote.toFixed(1)} · ${fmtVotes(t.votes)}`, live: true }];
+  if (a?.rt != null) out.push({ k: 'Rotten T.', v: a.rt, txt: a.rt + '%', live: true });
+  if (a?.mc != null) out.push({ k: 'Metacritic', v: a.mc, txt: String(a.mc), live: true });
+  if (a?.honorCount) out.push({ k: 'Honours', v: Math.min(100, a.honorCount * 12), txt: String(a.honorCount), live: true });
+  return out;
+}
+
+// Enrich candidates with details (runtime, IMDb id, where to watch) + Wikidata.
+export async function enrich(items, ctx, limit = 30) {
+  const top = items.slice(0, limit);
+  const det = [];
+  for (let i = 0; i < top.length; i += 8) det.push(...await Promise.all(top.slice(i, i + 8).map(t => details(t.kind, t.id).catch(() => null))));
+  const imdb = det.map(d => d?.external_ids?.imdb_id || d?.imdb_id || null);
+  const acc = await acclaim(imdb).catch(() => ({}));
+  return top.map((t, i) => {
+    const d = det[i] || {};
+    const runtime = t.kind === 'movie' ? d.runtime : (d.episode_run_time || [])[0];
+    const langName = (d.spoken_languages || []).find(l => l.iso_639_1 === t.lang)?.english_name || t.lang?.toUpperCase();
+    return { ...t, runtime, seasons: d.number_of_seasons, imdb: imdb[i], acclaim: acc[imdb[i]] || null, watch: watchInfo(d, ctx.region, ctx), langName };
   });
-  rows.sort((x, y) => (y.matched - x.matched) || (y.s - x.s));
-  const strictCount = rows.filter(r => r.matched === G).length;
-  const picked = rows.slice(0, 10);
-  const recs = picked.map(({ t, s, matched, missed }) => {
-    const v = verify(t, region);
-    const strict = matched === G;
-    const fit = G ? matched / G : 1;
-    const pct = strict ? Math.min(99, Math.round(80 + s * 20)) : Math.min(79, Math.round(45 + fit * 25 + s * 10));
-    const eff = t.tags.filter(x => a.tags.has(x)).slice(0, 3).join(', ');
-    return {
-      ...v, id: t.id, title: t, pct, strict, missed, bars: sourceBars(t), gem: t.gem && !famous(t),
-      honors: (t.awards || []).join(' · '),
-      because: becauseOf(t, asked, answers, freeText),
-      why: `${eff ? 'Fits ' + eff + '. ' : ''}${t.overview}`,
-    };
-  });
+}
+
+export function score(t, st, shown = {}) {
+  const a = t.acclaim || {};
+  const parts = [[bayes(t) / 10, 0.45]];
+  if (a.rt != null) parts.push([a.rt / 100, 0.18]);
+  if (a.mc != null) parts.push([a.mc / 100, 0.18]);
+  let s = parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[1], 0);
+  s += Math.min(0.06, (a.honorCount || 0) * 0.01) + (a.festival ? 0.03 : 0);
+  if (!t.watch?.blocked) s += 0.05;
+  if (t.watch?.mine) s += 0.04;
+  if (st.fame === 'gems') s += Math.max(0, 0.04 - t.votes / 100000);
+  // unless you asked for popular titles, the most famous ones step back a little
+  if (st.fame !== 'popular' && t.votes > (t.kind === 'movie' ? 15000 : 5000)) s -= 0.035;
+  s -= Math.min(0.06, (shown[t.key] || 0) * 0.015);
+  return s;
+}
+
+export function toRec(t, st, strict) {
+  const a = t.acclaim || {};
+  const sc = score(t, st);
+  const pct = strict === false ? Math.min(79, Math.round(50 + sc * 25)) : Math.min(99, Math.round(70 + sc * 30));
+  const meta = [t.year, t.kind === 'tv' ? (t.seasons ? `${t.seasons} season${t.seasons > 1 ? 's' : ''}` : 'Series') : t.runtime ? `${t.runtime} min` : 'Film', t.langName].filter(Boolean).join(' · ');
+  return {
+    ...t.watch, id: t.key, title: t, meta, pct, strict, missed: t.missed || [],
+    bars: bars(t, a), gem: t.votes < (t.kind === 'movie' ? 2500 : 700) && t.vote >= 7.2,
+    honors: (a.honors || []).join(' · '), festival: a.festival,
+    why: t.overview.length > 240 ? t.overview.slice(0, 237).replace(/\s+\S*$/, '') + '…' : t.overview,
+  };
+}
+
+// Rules that can only be checked once full details are in. TMDB's search
+// index sometimes has a wrong runtime, so the real one is checked here.
+export function breaksDetails(t, st) {
+  if (st.maxRuntime && t.kind === 'movie' && t.runtime && t.runtime > st.maxRuntime) return true;
+  return false;
+}
+
+// Enrich in chunks until enough titles survive the detail checks.
+async function enrichValid(items, st, ctx, want, cap = 60) {
+  const out = [];
+  for (let i = 0; i < Math.min(items.length, cap) && out.length < want; i += 15) {
+    const chunk = await enrich(items.slice(i, i + 15), ctx, 15);
+    out.push(...chunk.filter(t => !breaksDetails(t, st)));
+  }
+  return out;
+}
+
+export async function recommend(st, pool, ctx) {
+  const shown = loadShown();
+  const pre = s => [...s].sort((a, b) => bayes(b) - bayes(a));
+  const strictE = await enrichValid(pre(pool.strict), st, ctx, 30);
+  const ranked = strictE.map(t => ({ t, s: score(t, st, shown) })).sort((a, b) => b.s - a.s).slice(0, 10);
+  let close = [];
+  if (ranked.length < 10 && pool.near.length) {
+    const nearE = await enrichValid(pre(pool.near), st, ctx, 10 - ranked.length + 4, 30);
+    close = nearE.map(t => ({ t, s: score(t, st, shown) })).sort((a, b) => b.s - a.s).slice(0, 10 - ranked.length);
+  }
+  const recs = [...ranked.map(x => toRec(x.t, st, true)), ...close.map(x => toRec(x.t, st, false))];
+  recordShown(recs.map(r => r.id));
   return {
     recs,
     trace: {
-      considered: cat.length,
-      excludedSeen: cat.length - unseen.length,
-      filtered: Object.values(out).reduce((x, y) => x + y, 0),
-      reasons: out,
-      passed: passed.length,
-      strict: strictCount,
-      requirements: a.groups.map(g => g.label),
-      sources: {
-        reviews: cat.filter(t => t.rt != null || t.mc != null).length,
-        reddit: cat.filter(t => t.reddit != null).length,
-        awards: live?.awards?.byId ? Object.keys(live.awards.byId).length : 0,
-      },
+      total: pool.total, strict: pool.strict.length, exhausted: pool.exhausted,
+      checked: strictE.length, withScores: strictE.filter(t => t.acclaim?.rt != null || t.acclaim?.mc != null).length,
+      festival: strictE.filter(t => t.acclaim?.festival).length,
+      rules: st.groups.map(g => g.label),
     },
   };
 }
 
-function becauseOf(t, asked, answers, freeText) {
-  const notes = [];
-  for (const q of asked || []) {
-    const o = optionOf(q, answers);
-    if (o && (o.tags || []).some(tag => t.tags.includes(tag))) {
-      const short = String(o.label).slice(0, 60);
-      if (!notes.includes(short)) notes.push(short);
-    }
-    if (notes.length === 2) break;
-  }
-  if (notes.length < 2 && freeText && freeText.trim()) notes.push(`your words: “${freeText.trim().slice(0, 60)}”`);
-  return notes;
-}
-
-// ---- Platform explorer ---------------------------------------------------------
-
-// A hidden gem: genuinely strong, genuinely under-watched. Uses the catalogue's
-// own popularity (not the live-inflated one) plus live Reddit chatter.
-export function isHiddenGem(t) {
-  const base = t.baseBuzz ?? t.buzz;
-  if (famous(t) || base > 76) return false;
-  if (t.reddit != null && t.reddit >= 10) return false;
-  return (t.imdb >= 7.6 && t.critic >= 75) || t.critic >= 90 || (t.rt != null && t.rt >= 92);
-}
+// ---- platform explorer ----------------------------------------------------------
 
 function rng(seed) { let s = seed >>> 0 || 1; return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return ((s >>> 0) % 1e6) / 1e6; }; }
 
-export function topForPlatform(catalogue, pids, sort, region, history, live = null, seed = 1, recent = new Set()) {
-  const cat = withLive(catalogue, live);
-  const onPlat = t => t.avail.some(x => pids.includes(x.p) && x.regions.includes(region));
-  const streams = t => t.avail.some(x => pids.includes(x.p) && x.type === 'stream' && x.regions.includes(region));
-  let list = cat.filter(t => onPlat(t) && !history.has(t.id));
-  const shown = loadShown();
-  if (sort === 'gems') {
-    // weighted random draw: better gems are likelier, but every shuffle differs
+export async function platformPicks({ providerIds, region, sort, seed, history, kind = 'movie' }, ctx) {
+  if (!providerIds.length) return { recs: [], total: 0 };
+  const base = { watch_region: region, with_watch_providers: providerIds.join('|'), with_watch_monetization_types: 'flatrate|free|ads', include_adult: 'false', language: 'en-US' };
+  const fm = FAME[kind];
+  let params;
+  if (sort === 'gems') params = { ...base, sort_by: 'vote_average.desc', 'vote_average.gte': fm.gems.rating, 'vote_count.gte': fm.gems.min, 'vote_count.lte': fm.gems.max };
+  else if (sort === 'buzz') params = { ...base, sort_by: 'popularity.desc', 'vote_count.gte': 50 };
+  else if (sort === 'new') params = { ...base, sort_by: 'popularity.desc', 'vote_average.gte': 6.8, 'vote_count.gte': 30, [kind === 'movie' ? 'primary_release_date.gte' : 'first_air_date.gte']: `${thisYear - 1}-01-01` };
+  else params = { ...base, sort_by: 'vote_average.desc', 'vote_average.gte': 7.4, 'vote_count.gte': kind === 'movie' ? 1500 : 400 };
+  const first = await discover(kind, { ...params, page: 1 });
+  const pages = Math.min(first.total_pages || 1, 500);
+  let raw = first.results || [];
+  if (sort === 'gems' && pages > 1) {
+    // random pages from the whole gem shelf, so every shuffle digs somewhere new
     const r = rng(seed);
-    const draw = arr => {
-      const fresh = arr.filter(t => !recent.has(t.id));
-      const base = fresh.length >= 6 ? fresh : arr;
-      return base.map(t => ({ t, k: Math.log(r() + 1e-9) / Math.pow(quality(t), 4), on: streams(t) }))
-        .sort((x, y) => (y.on - x.on) || (y.k - x.k)).map(x => x.t);
-    };
-    const gems = draw(list.filter(isHiddenGem)).slice(0, 9);
-    // thin platforms: top up with lesser-known strong titles, labelled as such
-    const extra = gems.length >= 6 ? [] : draw(list.filter(t => !gems.includes(t) && !famous(t) && t.imdb >= 7.5)).slice(0, 6 - gems.length);
-    list = [...gems, ...extra];
-  } else {
-    const key = sort === 'buzz' ? (t => t.buzz) : sort === 'critics' ? (t => (t.rt ?? t.mc ?? t.critic)) : (t => quality(t) * 100 - (famous(t) ? 4 : 0));
-    list = list.filter(t => t.imdb >= 7.5)
-      .sort((x, y) => (streams(y) - streams(x)) || (key(y) - (shown[y.id] || 0) * 2) - (key(x) - (shown[x.id] || 0) * 2));
+    const picks = [...new Set([1 + Math.floor(r() * pages), 1 + Math.floor(r() * pages)])];
+    raw = (await Promise.all(picks.map(p => discover(kind, { ...params, page: p })))).flatMap(d => d.results || []);
+    raw = raw.map(x => ({ x, k: r() })).sort((a, b) => a.k - b.k).map(o => o.x);
   }
-  return list.slice(0, 12).map(t => {
-    const v = verify(t, region);
-    const gem = isHiddenGem(t);
-    return {
-      ...v, id: t.id, title: t, pct: Math.min(99, Math.round(quality(t) * 100)), bars: sourceBars(t), gem,
-      honors: (t.awards || []).join(' · '),
-      why: `${gem ? 'Hidden gem — strong scores, little noise. ' : ''}${t.overview}`,
-    };
-  });
+  const items = raw.map(r => normalize(r, kind)).filter(t => !history.has(t.key)).slice(0, 12);
+  const enriched = await enrich(items, ctx, 12);
+  const recs = enriched.map(t => ({ ...toRec(t, {}, undefined), pct: Math.min(99, Math.round(bayes(t) * 10)) }));
+  return { recs, total: first.total_results || 0 };
 }
 
-// ---- memory -------------------------------------------------------------------
+// ---- memory (your own browser only: history and taste) --------------------------
 
-// Titles shown but ignored sink a little every run (only inside their match tier).
-const SKEY = 'cinescout.shown.v1';
+const SKEY = 'cinescout.shown.v2', HKEY = 'cinescout.history.v2', PKEY = 'cinescout.prefs.v2';
 export function loadShown() { try { return JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch { return {}; } }
-export function recordShown(ids) {
-  try {
-    const m = loadShown();
-    ids.forEach(id => { m[id] = (m[id] || 0) + 1; });
-    localStorage.setItem(SKEY, JSON.stringify(m));
-  } catch {}
-}
-
-const HKEY = 'matinee.history.v1', PKEY = 'matinee.prefs.v1', RKEY = 'matinee.runs.v1';
-export function loadHistory() { try { const d = JSON.parse(localStorage.getItem(HKEY) || '{}'); return new Set([...(d.seen || []), ...(d.rejected || [])]); } catch { return new Set(); } }
-export function saveHistory(s) { try { localStorage.setItem(HKEY, JSON.stringify({ seen: [...s], rejected: [] })); } catch {} }
+export function recordShown(ids) { try { const m = loadShown(); ids.forEach(id => { m[id] = (m[id] || 0) + 1; }); localStorage.setItem(SKEY, JSON.stringify(m)); } catch {} }
+export function loadHistory() { try { return new Set(JSON.parse(localStorage.getItem(HKEY) || '[]')); } catch { return new Set(); } }
+export function saveHistory(s) { try { localStorage.setItem(HKEY, JSON.stringify([...s])); } catch {} }
 export function loadPrefs() { try { return JSON.parse(localStorage.getItem(PKEY) || 'null'); } catch { return null; } }
 export function savePrefs(p) { try { localStorage.setItem(PKEY, JSON.stringify(p)); } catch {} }
-export function loadRuns() { try { return +localStorage.getItem(RKEY) || 0; } catch { return 0; } }
-export function saveRuns(n) { try { localStorage.setItem(RKEY, String(n)); } catch {} }

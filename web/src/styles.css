@@ -536,3 +536,8 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
   .pbar { grid-template-columns: 96px 1fr; }
   .mlist { grid-template-columns: 1fr; }
 }
+
+/* ---------- intro v4: calmer ---------- */
+.intro-drift { position: absolute; inset: 0; animation: introDrift 40s ease-in-out infinite alternate; }
+@keyframes introDrift { from { transform: scale(1); } to { transform: scale(1.06) translate3d(-1%, -.6%, 0); } }
+.intro-video { transition: opacity 2.2s cubic-bezier(.45,0,.25,1); }

@@ -192,23 +192,39 @@ export function useIntroScroll(on) {
   }, [on]);
 }
 
-// One trailer moment in a muted, inline, control-less YouTube player. Reports
-// when it is really playing and how far into its moment it is.
+// One trailer moment in a muted, inline, control-less YouTube player, slowed
+// to 0.75× for a calmer feel. It is only shown while its picture is actually
+// moving: if playback time stops advancing (buffering, a stall, a pause, the
+// end screen) it fades out before YouTube can draw a spinner or play/pause icon.
+const RATE = 0.75;
 function ClipFrame({ clip, visible, onPlaying, onTime }) {
   const frame = useRef(null);
   const cb = useRef({ onPlaying, onTime });
   cb.current = { onPlaying, onTime };
+  const [moving, setMoving] = useState(false);
   useEffect(() => {
+    let last = -1, lastAt = 0, state = -1, slowed = false;
+    const cmd = (func, args = []) => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
     const onMsg = e => {
       if (e.source !== frame.current?.contentWindow) return; // several players can be live at once
       let d; try { d = JSON.parse(e.data); } catch { return; }
       const info = d.info || {};
-      const state = d.event === 'onStateChange' ? d.info : info.playerState;
-      if (state === 1) cb.current.onPlaying();
-      if (typeof info.currentTime === 'number') cb.current.onTime(info.currentTime - clip.start);
+      const st = d.event === 'onStateChange' ? d.info : info.playerState;
+      if (typeof st === 'number') state = st;
+      if (state === 1 && !slowed) { cmd('setPlaybackRate', [RATE]); cmd('mute'); slowed = true; }
+      if (typeof info.currentTime === 'number') {
+        if (info.currentTime > last + 0.01) { last = info.currentTime; lastAt = Date.now(); }
+        cb.current.onTime(info.currentTime - clip.start);
+      }
     };
+    // watchdog: visible only while state is "playing" and time moved in the last 0.7 s
+    const dog = setInterval(() => {
+      const ok = state === 1 && Date.now() - lastAt < 700 && !document.hidden;
+      setMoving(ok);
+      if (ok) cb.current.onPlaying();
+    }, 150);
     window.addEventListener('message', onMsg);
-    return () => window.removeEventListener('message', onMsg);
+    return () => { window.removeEventListener('message', onMsg); clearInterval(dog); };
   }, [clip]);
   const onLoad = () => {
     const w = frame.current?.contentWindow;
@@ -218,45 +234,44 @@ function ClipFrame({ clip, visible, onPlaying, onTime }) {
     w.postMessage(JSON.stringify({ event: 'command', func: 'unloadModule', args: ['captions'] }), '*');
   };
   const src = `https://www.youtube-nocookie.com/embed/${clip.key}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&disablekb=1&fs=0&cc_load_policy=0&hl=en&start=${clip.start}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
-  return <iframe ref={frame} className={`intro-video ${visible ? 'on' : ''}`} src={src} title="" allow="autoplay; encrypted-media" tabIndex={-1} onLoad={onLoad} />;
+  return <iframe ref={frame} className={`intro-video ${visible && moving ? 'on' : ''}`} src={src} title="" allow="autoplay; encrypted-media" tabIndex={-1} onLoad={onLoad} />;
 }
 
-// A reel of calm trailer moments. Each plays its hand-picked window once, the
-// next one starts loading in a hidden player ~3 s before the end, then the two
-// crossfade. A player is only shown while it is actually playing, so YouTube's
-// spinner and play/pause icons never appear — and no poster is ever shown.
+// A reel of calm trailer moments. Each plays its hand-picked window once (at
+// 0.75×), the next one starts loading in a hidden player ~5 s before the end,
+// then the two crossfade slowly. No poster is ever shown.
 export function IntroReel({ clips }) {
   const [slots, setSlots] = useState([]); // { n, i, ready }
   const [active, setActive] = useState(0);
-  const st = useRef({ n: 0 });
   useEffect(() => {
     if (!clips?.length) return;
-    st.current = { n: 0 };
     setSlots([{ n: 0, i: 0, ready: false }]); setActive(0);
   }, [clips]);
   const live = useRef({ slots: [], active: 0 });
   live.current = { slots, active };
-  const ready = n => setSlots(s => s.map(x => (x.n === n ? { ...x, ready: true } : x)));
+  const ready = n => { if (!live.current.slots.find(x => x.n === n)?.ready) setSlots(s => s.map(x => (x.n === n ? { ...x, ready: true } : x))); };
   const onTime = (slot, t) => {
     const { slots: s, active: a } = live.current;
     if (slot.n !== a || !clips?.length) return;
     const len = clips[slot.i].len;
     const next = s.find(x => x.n === slot.n + 1);
-    if (t >= len - 3 && !next) { setSlots([...s, { n: slot.n + 1, i: (slot.i + 1) % clips.length, ready: false }]); return; }
-    // hand over at the end of the window; if the next one isn't ready yet, wait up to 3 s more
-    if (next && ((t >= len && next.ready) || t >= len + 3)) {
+    if (t >= len - 5 && !next) { setSlots([...s, { n: slot.n + 1, i: (slot.i + 1) % clips.length, ready: false }]); return; }
+    // hand over at the end of the window; if the next one isn't moving yet, wait up to 4 s more
+    if (next && ((t >= len && next.ready) || t >= len + 4)) {
       live.current.active = next.n;
       setActive(next.n);
-      setTimeout(() => setSlots(cur => cur.filter(x => x.n !== slot.n)), 1300);
+      setTimeout(() => setSlots(cur => cur.filter(x => x.n !== slot.n)), 2600);
     }
   };
   const cur = slots.find(x => x.n === active);
   const clip = cur && clips[cur.i];
   return (
     <div className="intro-bg" aria-hidden="true">
-      {!REDUCED && slots.map(x => (
-        <ClipFrame key={x.n} clip={clips[x.i]} visible={x.n === active && x.ready} onPlaying={() => ready(x.n)} onTime={t => onTime(x, t)} />
-      ))}
+      <div className="intro-drift">
+        {!REDUCED && slots.map(x => (
+          <ClipFrame key={x.n} clip={clips[x.i]} visible={x.n === active} onPlaying={() => ready(x.n)} onTime={t => onTime(x, t)} />
+        ))}
+      </div>
       <div className="intro-leak" />
       <div className="intro-shade" />
       <div className="intro-gate"><i /><i /><i /><i /></div>

@@ -112,8 +112,9 @@ const CALM = [
   ['Leave No Trace', 2018, '_07ktacEGo8', '/ax6LwhsAXesGCsBagE21DgwUYZf.jpg', 6, 12],
 ];
 
-// One quiet moment from a calm film's trailer, chosen at random per visit.
-export async function introClip() {
-  const [title, year, key, backdrop, start, len] = CALM[Math.floor(Math.random() * CALM.length)];
-  return { key, title, year, backdrop: IMG(backdrop, 'original'), start, len };
+// A short reel: n different calm films in random order, each with its
+// hand-picked text-free moment.
+export function introReel(n = 4) {
+  return [...CALM].sort(() => Math.random() - 0.5).slice(0, n)
+    .map(([title, year, key, , start, len]) => ({ key, title, year, start, len }));
 }

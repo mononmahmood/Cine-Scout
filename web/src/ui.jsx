@@ -191,33 +191,20 @@ export function useIntroScroll(on) {
   }, [on]);
 }
 
-// Full-screen looping moment from a calm film's official trailer (muted,
-// inline, no controls, captions off). The video is only visible while it is
-// actually playing, so YouTube's spinner or play/pause icon never shows; the
-// loop jumps back just before the end with a soft dip to the still frame.
-export function IntroClip({ clip }) {
+// One trailer moment in a muted, inline, control-less YouTube player. Reports
+// when it is really playing and how far into its moment it is.
+function ClipFrame({ clip, visible, onPlaying, onTime }) {
   const frame = useRef(null);
-  const [visible, setVisible] = useState(false);
-  const len = clip?.len || 10;
+  const cb = useRef({ onPlaying, onTime });
+  cb.current = { onPlaying, onTime };
   useEffect(() => {
-    if (!clip) return;
-    let looping = false;
-    const cmd = (func, args = []) => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
-    const restart = () => {
-      if (looping) return; looping = true;
-      setVisible(false);
-      setTimeout(() => { cmd('seekTo', [clip.start, true]); cmd('playVideo'); looping = false; }, 450);
-    };
     const onMsg = e => {
-      let host; try { host = new URL(e.origin).hostname; } catch { return; }
-      if (!/youtube(-nocookie)?\.com$/.test(host)) return;
+      if (e.source !== frame.current?.contentWindow) return; // several players can be live at once
       let d; try { d = JSON.parse(e.data); } catch { return; }
       const info = d.info || {};
       const state = d.event === 'onStateChange' ? d.info : info.playerState;
-      if (state === 1 && !looping) setVisible(true);
-      if (state === 3 || state === 2 || state === -1) setVisible(false); // buffering / paused: hide the spinner and icons
-      if (state === 0) restart();
-      if (typeof info.currentTime === 'number' && info.currentTime >= clip.start + len) restart();
+      if (state === 1) cb.current.onPlaying();
+      if (typeof info.currentTime === 'number') cb.current.onTime(info.currentTime - clip.start);
     };
     window.addEventListener('message', onMsg);
     return () => window.removeEventListener('message', onMsg);
@@ -225,24 +212,60 @@ export function IntroClip({ clip }) {
   const onLoad = () => {
     const w = frame.current?.contentWindow;
     if (!w) return;
-    w.postMessage(JSON.stringify({ event: 'listening', id: 'intro', channel: 'widget' }), '*');
+    w.postMessage(JSON.stringify({ event: 'listening', id: clip.key, channel: 'widget' }), '*');
     w.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['onStateChange'] }), '*');
     w.postMessage(JSON.stringify({ event: 'command', func: 'unloadModule', args: ['captions'] }), '*');
   };
-  const src = clip && `https://www.youtube-nocookie.com/embed/${clip.key}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&disablekb=1&fs=0&cc_load_policy=0&hl=en&start=${clip.start}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  const src = `https://www.youtube-nocookie.com/embed/${clip.key}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&disablekb=1&fs=0&cc_load_policy=0&hl=en&start=${clip.start}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  return <iframe ref={frame} className={`intro-video ${visible ? 'on' : ''}`} src={src} title="" allow="autoplay; encrypted-media" tabIndex={-1} onLoad={onLoad} />;
+}
+
+// A reel of calm trailer moments. Each plays its hand-picked window once, the
+// next one starts loading in a hidden player ~3 s before the end, then the two
+// crossfade. A player is only shown while it is actually playing, so YouTube's
+// spinner and play/pause icons never appear — and no poster is ever shown.
+export function IntroReel({ clips }) {
+  const [slots, setSlots] = useState([]); // { n, i, ready }
+  const [active, setActive] = useState(0);
+  const st = useRef({ n: 0 });
+  useEffect(() => {
+    if (!clips?.length) return;
+    st.current = { n: 0 };
+    setSlots([{ n: 0, i: 0, ready: false }]); setActive(0);
+  }, [clips]);
+  const live = useRef({ slots: [], active: 0 });
+  live.current = { slots, active };
+  const ready = n => setSlots(s => s.map(x => (x.n === n ? { ...x, ready: true } : x)));
+  const onTime = (slot, t) => {
+    const { slots: s, active: a } = live.current;
+    if (slot.n !== a || !clips?.length) return;
+    const len = clips[slot.i].len;
+    const next = s.find(x => x.n === slot.n + 1);
+    if (t >= len - 3 && !next) { setSlots([...s, { n: slot.n + 1, i: (slot.i + 1) % clips.length, ready: false }]); return; }
+    // hand over at the end of the window; if the next one isn't ready yet, wait up to 3 s more
+    if (next && ((t >= len && next.ready) || t >= len + 3)) {
+      live.current.active = next.n;
+      setActive(next.n);
+      setTimeout(() => setSlots(cur => cur.filter(x => x.n !== slot.n)), 1300);
+    }
+  };
+  const cur = slots.find(x => x.n === active);
+  const clip = cur && clips[cur.i];
   return (
     <div className="intro-bg" aria-hidden="true">
-      {clip?.backdrop && <div className="intro-still" style={{ backgroundImage: `url("${clip.backdrop}")` }} />}
-      {src && !REDUCED && <iframe ref={frame} className={`intro-video ${visible ? 'on' : ''}`} src={src} title="" allow="autoplay; encrypted-media" tabIndex={-1} onLoad={onLoad} />}
+      {!REDUCED && slots.map(x => (
+        <ClipFrame key={x.n} clip={clips[x.i]} visible={x.n === active && x.ready} onPlaying={() => ready(x.n)} onTime={t => onTime(x, t)} />
+      ))}
       <div className="intro-leak" />
       <div className="intro-shade" />
       <div className="intro-gate"><i /><i /><i /><i /></div>
       <div className="hero-grain" />
+      {clip && <div className="intro-credit" key={clip.key}>Now showing · <i>{clip.title}</i> ({clip.year}) · official trailer</div>}
     </div>
   );
 }
 
-export function IntroHero({ clip, onStart }) {
+export function IntroHero({ onStart }) {
   return (
     <section className="intro-hero">
       <div className="intro-copy">
@@ -253,7 +276,6 @@ export function IntroHero({ clip, onStart }) {
         <span>Scroll to start</span>
         <i>⌄</i>
       </button>
-      {clip && <div className="intro-credit">Now showing · <i>{clip.title}</i> ({clip.year}) · official trailer</div>}
     </section>
   );
 }

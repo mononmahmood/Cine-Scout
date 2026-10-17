@@ -469,3 +469,23 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
 }
 .intro-credit { top: 44px; bottom: auto; right: 44px; left: auto; text-align: right; }
 @media (max-width: 860px) { .intro-credit { top: 30px; right: 30px; left: 30px; bottom: auto; text-align: right; } }
+
+/* ---------- intro v3: reel, no poster, pinned phone logo ---------- */
+.intro-bg { background: radial-gradient(80% 60% at 50% 45%, #1d1a14 0%, #0b0b0d 70%); }
+.intro-video { transition: opacity 1.2s ease; }
+.intro-credit { opacity: calc(1 - var(--p, 0) * 2); animation: fadeIn 1.2s ease both; }
+@media (max-width: 860px) {
+  /* the logo pins to the very top once you scroll into the questions */
+  .mhead { position: sticky; top: 0; z-index: 6; margin: 0 -12px 10px; padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+    background: rgba(11,11,13,.78); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); }
+  .intro-mode .after-intro .topbar { padding-top: 4px; }
+}
+/* the questions part is always at least a screen tall, so scrolling down lands its logo at the very top */
+.intro-mode .after-intro { min-height: 100vh; min-height: 100svh; }
+
+@media (max-width: 860px) {
+  /* trailer intro: the header is fixed (outside the animated section) and fades in as you scroll */
+  .intro-mode .mhead { position: fixed; top: 0; left: 0; right: 0; margin: 0; padding-left: 16px; padding-right: 16px; }
+  .intro-mode .after-intro { padding-top: 58px; }
+}
+.intro-mode .mhead { animation: none; } /* the entrance fade would override the scroll-linked opacity */

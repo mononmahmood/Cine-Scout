@@ -88,8 +88,8 @@ export async function acclaimByTmdb(keys) {
   return out;
 }
 
-// Calm, painterly films for the intro: English-language (no burned-in
-// subtitles), official trailers verified embeddable in 1080p or better.
+// Calm, painterly films for the intro, official trailers verified embeddable
+// in 1080p or better.
 // [title, year, YouTube key, TMDB backdrop, start s, length s] — each window was
 // picked by eye from the trailer's frame-by-frame storyboard to be free of
 // title cards, review quotes and logos.
@@ -110,6 +110,16 @@ const CALM = [
   ['Phantom Thread', 2017, 'xNsiQMeSvMk', '/sJZd1H4cl2Nxhj0nutVCK5pMczL.jpg', 46, 10],
   ['Little Women', 2019, 'AST2-4db4ic', '/lqxxwTRk0l7CubY6JkJdhnwJEkn.jpg', 90, 11],
   ['Leave No Trace', 2018, '_07ktacEGo8', '/ax6LwhsAXesGCsBagE21DgwUYZf.jpg', 6, 12],
+  // festival and art-house films — windows chosen where no subtitles or cards show
+  ['Portrait of a Lady on Fire', 2019, 'R-fQPTwma9o', '', 8, 8],
+  ['Roma', 2018, '6BS27ngZtxg', '', 0, 9],
+  ['Paris, Texas', 1984, 'Nmvte2r7Z8c', '', 10, 11],
+  ['In the Mood for Love', 2000, 'rc3QleuaQMw', '', 3, 7],
+  ['Close', 2022, 'wm6guCngagM', '', 36, 10],
+  ['The Lunchbox', 2013, 'lJxLudSPxsQ', '', 10, 9],
+  ['Village Rockstars', 2017, 'tTov2nVgXaU', '', 3, 8],
+  ['Memoria', 2021, 'IluUJF4_WCk', '', 0, 8],
+  ['Pather Panchali', 1955, 'mgv68E_o6VM', '', 22, 10],
 ];
 
 // A short reel: n different calm films in random order, each with its

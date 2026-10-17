@@ -8,6 +8,7 @@ import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, crit
 const INTRO = typeof location !== 'undefined' && new URLSearchParams(location.search).get('intro') !== '0'
   && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 import { CATALOGUE } from './data.js';
+import Dashboard from './dashboard.jsx';
 import { HeroReel, Card, Thinking, wait, REDUCED, IntroReel, IntroHero, useIntroScroll } from './ui.jsx';
 
 const NEVER = [['Horror', G.horror], ['War', G.war], ['Romance', G.romance], ['Animation', G.animation], ['Musicals', G.music], ['Documentary', G.documentary]];
@@ -58,25 +59,6 @@ function Taste({ initial, available, welcome, plain, onDone }) {
   );
 }
 
-function Watched({ items, onRemove, onDone }) {
-  return (
-    <div className="onboard wide">
-      <h2>Titles you have marked</h2>
-      <p className="mut">These never come back as recommendations. Remove one to allow it again.</p>
-      {items.length === 0 && <p className="mut">Nothing yet — use “Seen” or “Not for me” on any card.</p>}
-      <div className="seenlist">
-        {items.map((t, i) => (
-          <div key={t.key} className="seenrow on" style={{ '--i': i }}>
-            <span><b>{t.title}</b> <span className="mut">({t.year || '—'})</span></span>
-            <button className="linkbtn" onClick={() => onRemove(t.key)}>remove</button>
-          </div>
-        ))}
-      </div>
-      <div className="btnrow"><button className="bigbtn" onClick={onDone}>Done</button></div>
-    </div>
-  );
-}
-
 export default function App() {
   const [route, setRoute] = useState('mind');
   const [region, setRegion] = useState('IN');
@@ -84,7 +66,9 @@ export default function App() {
   const firstVisit = useRef(!loadPrefs());
   const [history, setHistory] = useState(() => loadHistory());
   const [marked, setMarked] = useState(() => { try { return JSON.parse(localStorage.getItem('cinescout.marked.v2') || '[]'); } catch { return []; } });
-  const [panel, setPanel] = useState(() => (loadPrefs() ? null : 'welcome')); // 'welcome' | 'taste' | 'watched'
+  const [panel, setPanel] = useState(() => (loadPrefs() ? null : 'welcome')); // 'welcome' | 'taste' | 'dash'
+  const [sessions, setSessions] = useState(() => { try { return JSON.parse(localStorage.getItem('cinescout.sessions.v1') || '[]'); } catch { return []; } });
+  useEffect(() => { try { localStorage.setItem('cinescout.sessions.v1', JSON.stringify(sessions.slice(0, 50))); } catch {} }, [sessions]);
   const [toast, setToast] = useState(null);
   const [leavingIds, setLeavingIds] = useState(new Set());
   const [apiError, setApiError] = useState(null);
@@ -187,6 +171,12 @@ export default function App() {
       const r = await recommend(s, p, ctx);
       if (my !== run.current) return;
       setPool(p); setResult(r); setMoreState(hasMore(r.cursor) ? 'idle' : 'done'); setPhase('done');
+      // keep the session for the dashboard (answers + top picks)
+      setSessions(list => [{
+        at: Date.now(), region, qa: na, mood: (m.heard.length || m.avoided.length) ? freeText : '',
+        answers: na.map(a => { const q = byId[a.qid]; return { topic: q.topic, label: q.options.find(o => o.id === a.oid)?.label }; }),
+        picks: r.recs.slice(0, 6).map(x => ({ key: x.id, title: x.title.title, year: x.title.year, poster: x.title.poster })),
+      }, ...list].slice(0, 50));
     } catch (e) { if (my === run.current) { setApiError(e.status === 503 ? 'setup' : 'down'); setPhase('ask'); } }
   };
 
@@ -217,23 +207,26 @@ export default function App() {
 
   const loadMore = async () => {
     if (!result?.cursor || moreState === 'loading') return;
+    const my = run.current; // a new session started meanwhile → drop this batch
     setMoreState('loading');
     try {
       const extra = await nextBatch(result.cursor, 10);
+      if (my !== run.current) return;
       const have = new Set(result.recs.map(r => r.id));
       const add = extra.filter(r => !have.has(r.id));
-      setResult(r => ({ ...r, recs: [...r.recs.filter(x => x.strict), ...add, ...r.recs.filter(x => x.strict === false)] }));
+      setResult(r => r && { ...r, recs: [...r.recs.filter(x => x.strict), ...add, ...r.recs.filter(x => x.strict === false)] });
       setMoreState(add.length && hasMore(result.cursor) ? 'idle' : 'done');
-    } catch { setMoreState('idle'); say('Could not load more right now'); }
+    } catch { if (my === run.current) { setMoreState('idle'); say('Could not load more right now'); } }
   };
 
-  const reset = () => { run.current++; setAnswers([]); setFreeText(''); setMood(EMPTY_MOOD); setResult(null); setPool(null); setCurrent(null); setPicked(null); setLeaving(false); setPhase('ask'); setRoute('mind'); setPanel(null); };
+  const reset = () => { run.current++; setMoreState('idle'); setAnswers([]); setFreeText(''); setMood(EMPTY_MOOD); setResult(null); setPool(null); setCurrent(null); setPicked(null); setLeaving(false); setPhase('ask'); setRoute('mind'); setPanel(null); };
 
   const act = (rec, kindOf) => {
     setLeavingIds(s => new Set([...s, rec.id]));
     setTimeout(() => {
       setHistory(h => new Set([...h, rec.id]));
-      setMarked(m => [{ key: rec.id, title: rec.title.title, year: rec.title.year, why: kindOf }, ...m.filter(x => x.key !== rec.id)]);
+      const t = rec.title;
+      setMarked(m => [{ key: rec.id, title: t.title, year: t.year, why: kindOf, at: Date.now(), poster: t.poster, imdb: t.imdbRating || null, genres: t.genres, lang: t.lang, kind: t.kind }, ...m.filter(x => x.key !== rec.id)]);
       setResult(r => r && { ...r, recs: r.recs.filter(x => x.id !== rec.id) });
       setPlat(p => ({ ...p, recs: p.recs.filter(x => x.id !== rec.id) }));
       setLeavingIds(s => { const n = new Set(s); n.delete(rec.id); return n; });
@@ -270,7 +263,7 @@ export default function App() {
     { k: 'mind', label: 'Mind-Reader', icon: '◎', on: () => go('mind') },
     { k: 'plat', label: 'By platform', icon: '▦', on: () => go('plat') },
     { k: 'taste', label: 'My taste', icon: '♥', on: () => setPanel('taste') },
-    { k: 'watched', label: 'Watched', icon: '✓', on: () => setPanel('watched') },
+    { k: 'dash', label: 'Dashboard', icon: '▤', on: () => setPanel('dash') },
   ];
   const rules = [
     st.kind === 'movie' && 'Films only', st.kind === 'tv' && 'Series only',
@@ -329,8 +322,10 @@ export default function App() {
         <div className="view" key={view}>
           {view === 'taste' || view === 'welcome' ? (
             <Taste initial={prefs} available={providers} welcome={view === 'welcome'} plain={INTRO} onDone={p => { const n = { services: [], never: [], ...prefs, ...p }; setPrefs(n); savePrefs(n); setPanel(null); say(view === 'welcome' ? 'Set — let’s find tonight’s film' : 'Saved'); }} />
-          ) : view === 'watched' ? (
-            <Watched items={marked} onDone={() => setPanel(null)} onRemove={key => { setMarked(m => m.filter(x => x.key !== key)); setHistory(h => { const n = new Set(h); n.delete(key); return n; }); }} />
+          ) : view === 'dash' ? (
+            <Dashboard marked={marked} setMarked={setMarked} setHistory={setHistory} sessions={sessions} setSessions={setSessions} prefs={prefs} say={say}
+              onEditTaste={() => setPanel('taste')}
+              onRerun={sess => { reset(); setPanel(null); setAnswers(sess.qa); finish(sess.qa, EMPTY_MOOD); }} />
           ) : view === 'mind' ? (
             <>
               <h2 className="headline">Tonight, what are you?</h2>

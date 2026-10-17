@@ -78,11 +78,28 @@ const FAME = {
   tv: { popular: { min: 800 }, gems: { min: 40, max: 700, rating: 7.2 }, base: { min: 60 } },
 };
 // Regional-language titles get far fewer TMDB votes, so vote bands shrink for them.
-const fameOf = (kind, st) => {
-  const f = { ...FAME[kind].base, ...(st.fame ? FAME[kind][st.fame] : {}) };
-  if (st.langs && !st.langs.includes('en')) { f.min = Math.max(10, Math.round(f.min / 6)); if (f.max) f.max = Math.round(f.max / 6); }
-  return f;
-};
+const fameOf = (kind, st) => ({ ...FAME[kind].base, ...(st.fame ? FAME[kind][st.fame] : {}) });
+
+// Non-English titles get few TMDB votes (Bengali: ~33 films pass the usual bar,
+// ~1,700 exist), so for them TMDB is only used to find titles; quality and
+// fame are judged on IMDb, where the same films have thousands of votes.
+export const regional = st => !!st.langs?.length && !st.langs.includes('en');
+const REG = { minRating: 6.2, minVotes: 100, popular: 5000, gemsMax: 5000 };
+function regionalOk(t, st) {
+  if (t.imdbRating != null) {
+    if (t.imdbRating < REG.minRating || t.imdbVotes < REG.minVotes) return false;
+    if (st.fame === 'popular' && t.imdbVotes < REG.popular) return false;
+    if (st.fame === 'gems' && t.imdbVotes >= REG.gemsMax) return false;
+    return true;
+  }
+  return t.vote >= 6.3 && t.votes >= 3 && st.fame !== 'popular'; // not on IMDb/Wikidata: fall back to TMDB
+}
+async function vetRegional(items) {
+  if (!items.length) return [];
+  const acc = await acclaimByTmdb(items.map(t => t.key)).catch(() => ({}));
+  const ir = await imdbRatings(Object.values(acc).map(a => a.imdb)).catch(() => ({}));
+  return items.map(t => { const a = acc[t.key]; const r = a?.imdb && ir[a.imdb]; return { ...t, acclaim: a || null, imdb: a?.imdb || null, imdbRating: r?.rating ?? null, imdbVotes: r?.votes ?? 0 }; });
+}
 
 export function failures(t, st) {
   const f = [];
@@ -95,6 +112,7 @@ export function breaksHard(t, st) {
   if (st.family && t.kind === 'tv' && ![G.family, G.kids, G.animation].some(g => t.genres.includes(g))) return true;
   if (st.langs && !st.langs.includes(t.lang)) return true;
   if (st.minYear && t.year && t.year < st.minYear) return true;
+  if (regional(st)) return false; // judged on IMDb in buildPool
   const fm = fameOf(t.kind, st);
   if (t.votes < fm.min || (fm.max && t.votes > fm.max)) return true;
   return false;
@@ -110,11 +128,15 @@ export function discoverParams(kind, st, ctx) {
     'vote_count.gte': fm.min, 'vote_average.gte': fm.rating || 6.5,
   };
   if (fm.max) p['vote_count.lte'] = fm.max;
+  if (regional(st)) { // cast a wide net; IMDb decides quality afterwards
+    p['vote_count.gte'] = 2; delete p['vote_count.lte']; p['vote_average.gte'] = 5;
+    p.sort_by = st.fame === 'gems' ? 'vote_average.desc' : 'vote_count.desc';
+  }
   // push the narrowest rule to the server, the rest are checked client-side
   const g = [...st.groups].filter(x => x.ids[kind]?.length).sort((a, b) => a.ids[kind].length - b.ids[kind].length)[0];
   if (g) p.with_genres = g.ids[kind].join('|');
   if (st.none[kind].size) p.without_genres = [...st.none[kind]].join(',');
-  if (st.langs?.length === 1) p.with_original_language = st.langs[0];
+  if (st.langs?.length) p.with_original_language = ctx.lang || st.langs[0];
   if (st.minYear) p[kind === 'movie' ? 'primary_release_date.gte' : 'first_air_date.gte'] = `${st.minYear}-01-01`;
   if (kind === 'movie') {
     p['primary_release_date.lte'] = new Date().toISOString().slice(0, 10);
@@ -141,25 +163,33 @@ export async function buildPool(st, ctx, want = 60, maxPages = 9) {
   const strict = [], near = [], seen = new Set();
   let total = 0, exhausted = true;
   const kinds = KINDS(st);
-  for (const kind of kinds) {
-    const params = discoverParams(kind, st, ctx);
-    let page = 1, pages = 1, kindStrict = 0;
-    while (page <= Math.min(pages, maxPages)) {
-      const nums = [page, page + 1, page + 2].filter(n => n === 1 || n <= Math.min(pages, maxPages));
+  const reg = regional(st);
+  const langs = st.langs?.length ? st.langs : [null];
+  const lanes = kinds.flatMap(kind => langs.map(lang => ({ kind, lang })));
+  const pageCap = reg ? Math.max(maxPages, 15) : maxPages;
+  for (const { kind, lang } of lanes) {
+    const params = discoverParams(kind, st, { ...ctx, lang });
+    let page = 1, pages = 1, laneStrict = 0;
+    while (page <= Math.min(pages, pageCap)) {
+      const nums = [page, page + 1, page + 2].filter(n => n === 1 || n <= Math.min(pages, pageCap));
       const batch = await Promise.all(nums.map(n => discover(kind, { ...params, page: n })));
+      let fresh = [];
       for (const [i, d] of batch.entries()) {
         pages = Math.min(d.total_pages || 1, 500);
         if (nums[i] === 1) total += d.total_results || 0;
         for (const r of d.results || []) {
           const t = normalize(r, kind);
           if (seen.has(t.key) || ctx.history.has(t.key) || breaksHard(t, st)) continue;
-          seen.add(t.key);
-          const f = failures(t, st);
-          if (!f.length) { strict.push(t); kindStrict++; } else if (f.length === 1) near.push({ ...t, missed: f });
+          seen.add(t.key); fresh.push(t);
         }
       }
+      if (reg) fresh = (await vetRegional(fresh)).filter(t => regionalOk(t, st));
+      for (const t of fresh) {
+        const f = failures(t, st);
+        if (!f.length) { strict.push(t); laneStrict++; } else if (f.length === 1) near.push({ ...t, missed: f });
+      }
       page += nums.length;
-      if (kindStrict >= want / kinds.length) break;
+      if (laneStrict >= want / lanes.length) break;
     }
     if (page <= pages) exhausted = false;
   }
@@ -173,7 +203,10 @@ function optionKeeps(o, t, st) {
   if (s.kind && s.kind !== 'both' && t.kind !== s.kind) return false;
   if (s.minYear && t.year < s.minYear) return false;
   if (s.langs && !s.langs.includes(t.lang)) return false;
-  if (s.fame) { const fm = fameOf(t.kind, { ...st, fame: s.fame }); if (t.votes < (fm.min || 0) || (fm.max && t.votes > fm.max)) return false; }
+  if (s.fame) {
+    if (regional(st)) { if (!regionalOk(t, { ...st, fame: s.fame })) return false; }
+    else { const fm = fameOf(t.kind, { ...st, fame: s.fame }); if (t.votes < (fm.min || 0) || (fm.max && t.votes > fm.max)) return false; }
+  }
   if (o.any && !(o.any[t.kind] || []).some(id => t.genres.includes(id))) return false;
   if (o.none && (o.none[t.kind] || []).some(id => t.genres.includes(id))) return false;
   return true;
@@ -274,7 +307,7 @@ export async function enrich(items, ctx) {
 export function quality(t) {
   const a = t.acclaim || {};
   const parts = [[bayes(t) / 10, t.imdbRating ? 0.15 : 0.45]];
-  if (t.imdbRating && t.imdbVotes >= 500) parts.push([t.imdbRating / 10, 0.4]);
+  if (t.imdbRating && t.imdbVotes >= 100) parts.push([t.imdbRating / 10, t.imdbVotes >= 1000 ? 0.4 : 0.3]);
   if (a.rt != null) parts.push([a.rt / 100, 0.18]);
   if (a.mc != null) parts.push([a.mc / 100, 0.18]);
   return parts.reduce((x, p) => x + p[0] * p[1], 0) / parts.reduce((x, p) => x + p[1], 0);
@@ -319,7 +352,7 @@ export function breaksDetails(t, st) {
 // A cursor walks the strict matches best-first; each call to nextBatch
 // enriches just enough titles to return the next 10 (for "Show 10 more").
 export function makeCursor(st, pool, ctx, maxPages = 9) {
-  const order = s => [...s].sort((a, b) => bayes(b) - bayes(a));
+  const order = s => [...s].sort((a, b) => (regional(st) ? quality(b) - quality(a) : bayes(b) - bayes(a)));
   return { st, ctx, queue: order(pool.strict), near: order(pool.near), pos: 0, spare: [], seen: new Set([...pool.strict, ...pool.near].map(t => t.key)), maxPages, exhausted: pool.exhausted, total: pool.total, strictCount: pool.strict.length };
 }
 
@@ -327,7 +360,7 @@ async function refill(c) {
   if (c.exhausted || c.maxPages >= 40) return false;
   c.maxPages += 10;
   const p = await buildPool(c.st, c.ctx, (c.maxPages) * 8, c.maxPages);
-  const fresh = p.strict.filter(t => !c.seen.has(t.key)).sort((a, b) => bayes(b) - bayes(a));
+  const fresh = p.strict.filter(t => !c.seen.has(t.key)).sort((a, b) => (regional(c.st) ? quality(b) - quality(a) : bayes(b) - bayes(a)));
   fresh.forEach(t => c.seen.add(t.key));
   c.queue.push(...fresh); c.exhausted = p.exhausted; c.strictCount += fresh.length;
   return fresh.length > 0;

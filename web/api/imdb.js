@@ -4,12 +4,14 @@
 // Data courtesy of IMDb (https://www.imdb.com), used for personal, non-commercial purposes.
 import { createGunzip } from 'node:zlib';
 import { Readable } from 'node:stream';
-import { send } from './_lib.js';
+import { send, rateLimit } from './_lib.js';
 
 const URL_ = 'https://datasets.imdbws.com/title.ratings.tsv.gz';
 const memo = new Map(); // warm-instance memo of ratings already found
 
 export default async function handler(req, res) {
+  // this one streams and scans a ~9 MB dataset per cold call — keep it tight
+  if (!rateLimit(req, res, { name: 'imdb', max: 60 })) return;
   const ids = [...new Set(String(req.query?.ids || '').split(',').filter(x => /^tt\d{6,10}$/.test(x)))].slice(0, 200);
   if (!ids.length) return send(res, 400, { error: 'ids required' });
   const out = {}, want = new Set();

@@ -8,6 +8,31 @@ export function send(res, status, body, maxAge = 3600) {
   res.status(status).send(JSON.stringify(body));
 }
 
+// ---- safety net -----------------------------------------------------------------
+
+// Per-IP rate limiting. Serverless instances come and go, so this is a blunt
+// per-instance guard — its job is to stop abusive loops and bursts from
+// reaching the upstream APIs, not to be a global quota.
+const buckets = new Map();
+export function rateLimit(req, res, { name = 'api', windowMs = 60000, max = 120 } = {}) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown').split(',')[0].trim() || 'unknown';
+  const now = Date.now(), key = name + ':' + ip;
+  let b = buckets.get(key);
+  if (!b || now - b.start > windowMs) { b = { start: now, n: 0 }; buckets.set(key, b); }
+  b.n++;
+  if (buckets.size > 10000) for (const [k, v] of buckets) if (now - v.start > windowMs) buckets.delete(k);
+  if (b.n > max) { send(res, 429, { error: 'Too many requests — take a breath and try again in a minute.' }); return false; }
+  return true;
+}
+
+// Free-text query input: cap the length, strip control characters. Anything
+// odd is dropped before it can be echoed or forwarded upstream.
+export const cleanQuery = (s, max = 80) =>
+  String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
+
+// Year parameter: pass only a plain four-digit year.
+export const cleanYear = y => (/^\d{4}$/.test(String(y || '')) ? String(y) : '');
+
 // Retries network drops and rate limits (TMDB answers 429 under bursts).
 export async function fetchJson(url, init = {}, timeoutMs = 12000, tries = 3) {
   for (let i = 1; ; i++) {

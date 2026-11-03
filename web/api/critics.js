@@ -1,7 +1,7 @@
 // Latest pieces from critics, cinephile blogs and film press, via their
 // public RSS feeds. Returns headlines + links only (never the articles).
 // ?q=Title&year=2019 → pieces mentioning that title; no q → latest overall.
-import { send, fetchText, mentions } from './_lib.js';
+import { send, fetchText, mentions, rateLimit, cleanQuery, cleanYear } from './_lib.js';
 
 const FEEDS = [
   { name: 'RogerEbert.com', url: 'https://www.rogerebert.com/feed', kind: 'critic' },
@@ -33,7 +33,9 @@ function parse(xml, feed) {
 }
 
 export default async function handler(req, res) {
-  const { q, year } = req.query || {};
+  if (!rateLimit(req, res, { name: 'critics', max: 90 })) return;
+  const q = cleanQuery(req.query?.q, 80);
+  const year = cleanYear(req.query?.year);
   const results = await Promise.allSettled(FEEDS.map(f => fetchText(f.url).then(x => parse(x, f))));
   const items = results.flatMap(r => r.status === 'fulfilled' ? r.value : []);
   const live = results.filter(r => r.status === 'fulfilled').length;

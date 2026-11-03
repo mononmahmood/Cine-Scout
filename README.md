@@ -26,6 +26,28 @@ npm run dev
 
 Open `http://localhost:5173/`. Or double-click `Start Cine Scout.command`.
 
+## Environment variables
+
+Set these in Vercel → Project → Settings → Environment Variables, then redeploy
+(see `.env.example` for the full list):
+
+- `TMDB_TOKEN` — **required.** TMDB v4 Read Access Token (or `TMDB_API_KEY`, v3).
+  Without it every API call answers 503 and the app shows the setup banner.
+- `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — **optional.** Reddit app-only
+  OAuth. Without them the app falls back to the public Arctic Shift archive.
+
+Streaming availability comes from TMDB's watch/providers endpoint (JustWatch
+data) — no JustWatch key is used.
+
+## Safety & privacy
+
+- API keys never reach the browser; all third-party calls go through the
+  `/api` functions.
+- Every `/api` function validates and caps its inputs and rate-limits per IP.
+- Security headers (CSP, HSTS, frame/XSS protections) are set in `web/vercel.json`.
+- No accounts, no tracking, no cookies — history, taste and dashboard live only
+  in the visitor's own browser and can be exported or erased from the dashboard.
+
 ## Smoke test
 
 ```bash

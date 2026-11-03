@@ -1,7 +1,7 @@
 // Reddit discussion for one title, or the week's top film threads.
 // Uses Reddit's official API (app-only OAuth) when REDDIT_CLIENT_ID and
 // REDDIT_CLIENT_SECRET are set; otherwise the public Arctic Shift archive.
-import { send, fetchJson, mentions } from './_lib.js';
+import { send, fetchJson, mentions, rateLimit, cleanQuery, cleanYear } from './_lib.js';
 
 const SUBS = ['movies', 'TrueFilm', 'criterion', 'flicks', 'MovieSuggestions', 'television', 'bollywood', 'tollywood', 'kollywood', 'IndianCinema', 'bangladesh'];
 const UA = 'web:cine-scout:1.0 (by /u/cinescout-app)';
@@ -42,17 +42,21 @@ async function archive(q, hot) {
 }
 
 export default async function handler(req, res) {
-  const { q, year, hot } = req.query || {};
-  if (!hot && !q) return send(res, 400, { error: 'q required' });
+  if (!rateLimit(req, res, { name: 'reddit', max: 90 })) return;
+  const { hot } = req.query || {};
+  const isHot = hot === '1';
+  const q = cleanQuery(req.query?.q, 80);
+  const year = cleanYear(req.query?.year);
+  if (!isHot && !q) return send(res, 400, { error: 'q required' });
   let posts = [], source = 'reddit';
   try {
     const tok = await token();
-    posts = tok ? await official(tok, q, hot) : (source = 'archive', await archive(q, hot));
+    posts = tok ? await official(tok, q, isHot) : (source = 'archive', await archive(q, isHot));
   } catch (e) {
-    try { source = 'archive'; posts = await archive(q, hot); }
+    try { source = 'archive'; posts = await archive(q, isHot); }
     catch { return send(res, 502, { error: 'Reddit unreachable', source }); }
   }
-  if (hot) {
+  if (isHot) {
     const top = posts.filter(p => !p.stickied).map(shape).sort((a, b) => (b.score + b.comments) - (a.score + a.comments)).slice(0, 12);
     return send(res, 200, { source, posts: top }, 1800);
   }

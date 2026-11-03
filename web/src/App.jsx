@@ -33,6 +33,7 @@ function Taste({ initial, available, welcome, plain, onDone }) {
             <h1 className="logo big">CINE <span className="scout">SCOUT</span></h1>
             <p className="slogan">for those who stay for the credits</p>
           </>}
+          <p className="lede">Not sure what to watch tonight?<br />Answer a few questions — we'll find films and series that fit your mood.</p>
           <p className="mut">Four quick choices so every pick fits you. All optional — you can change them any time under <b>My taste</b>.</p>
         </div>
       ) : (
@@ -66,7 +67,9 @@ export default function App() {
   const firstVisit = useRef(!loadPrefs());
   const [history, setHistory] = useState(() => loadHistory());
   const [marked, setMarked] = useState(() => { try { return JSON.parse(localStorage.getItem('cinescout.marked.v2') || '[]'); } catch { return []; } });
-  const [panel, setPanel] = useState(() => (loadPrefs() ? null : 'welcome')); // 'welcome' | 'taste' | 'dash'
+  // Every fresh load starts on the welcome/taste page — the intro plays first,
+  // and scrolling down lands here. 'welcome' | 'taste' | 'dash' | null
+  const [panel, setPanel] = useState('welcome');
   const [sessions, setSessions] = useState(() => { try { return JSON.parse(localStorage.getItem('cinescout.sessions.v1') || '[]'); } catch { return []; } });
   useEffect(() => { try { localStorage.setItem('cinescout.sessions.v1', JSON.stringify(sessions.slice(0, 50))); } catch {} }, [sessions]);
   const [toast, setToast] = useState(null);
@@ -259,12 +262,14 @@ export default function App() {
   const cardProps = (r, i) => ({ rec: r, index: i, leaving: leavingIds.has(r.id), onLove: () => act(r, 'love'), onSeen: () => act(r, 'seen'), onReject: () => act(r, 'reject') });
   const view = panel || route;
   const go = r => { setPanel(null); setRoute(r); };
+  // Menu order: My taste → Mind-Reader → By platform → Dashboard → New session.
   const NAV = [
+    { k: 'taste', label: 'My taste', icon: '♥', on: () => setPanel('taste'), isOn: v => v === 'taste' || v === 'welcome' },
     { k: 'mind', label: 'Mind-Reader', icon: '◎', on: () => go('mind') },
     { k: 'plat', label: 'By platform', icon: '▦', on: () => go('plat') },
-    { k: 'taste', label: 'My taste', icon: '♥', on: () => setPanel('taste') },
     { k: 'dash', label: 'Dashboard', icon: '▤', on: () => setPanel('dash') },
   ];
+  const isOn = (n, v) => (n.isOn ? n.isOn(v) : v === n.k);
   const rules = [
     st.kind === 'movie' && 'Films only', st.kind === 'tv' && 'Series only',
     st.maxRuntime && `Under ${st.maxRuntime} min`, st.status === 'ended' && 'Finished series',
@@ -285,12 +290,13 @@ export default function App() {
       <aside className="side">
         <h1 className="logo">CINE<br /><span className="scout">SCOUT</span></h1>
         <div className="tag">for those who stay for the credits</div>
-        <div className="sec">Reel reading · Explore · You</div>
+        <div className="sec">Find · Stream · Yours</div>
         <nav className="nav">
-          {NAV.map(n => <button key={n.k} className={view === n.k ? 'on' : ''} onClick={n.on}><span className="ico">{n.icon}</span>{n.label}</button>)}
+          {NAV.map(n => <button key={n.k} className={isOn(n, view) ? 'on' : ''} onClick={n.on}><span className="ico">{n.icon}</span>{n.label}</button>)}
           <button onClick={reset}><span className="ico">↺</span>New session</button>
         </nav>
         <div className="mut memo">{history.size === 0 ? 'No history yet.' : `Remembers ${history.size} — never repeats.`}</div>
+        <div className="mut privacy">Private by design — your history, taste and dashboard stay in this browser. No account, no tracking, nothing sent home.</div>
         <div className="mut attribution">Film data from TMDB · streaming data via JustWatch · scores and prizes from Wikidata · discussion from Reddit · headlines from critics’ public feeds. This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
       </aside>
       {INTRO ? <IntroReel clips={reel} /> : <HeroReel pool={heroPool} />}
@@ -305,7 +311,7 @@ export default function App() {
         <div className="after-intro" ref={startRef}>
         <div className="topbar">
           <div className="mut livebar"><span className={`livedot ${apiError ? 'off' : ''}`} />{apiError ? 'Live catalogue offline' : 'Live · TMDB, Wikidata, Reddit, critics'}</div>
-          <div className="seg" data-on={region}>
+          <div className="seg" data-on={region} role="group" aria-label="Choose your region">
             <span className="seg-pill" />
             {['IN', 'BD'].map(r => <button key={r} className={region === r ? 'on' : ''} onClick={() => { if (r !== region) { setRegion(r); reset(); } }}>{regionName(r)}</button>)}
           </div>
@@ -328,7 +334,7 @@ export default function App() {
               onRerun={sess => { reset(); setPanel(null); setAnswers(sess.qa); finish(sess.qa, EMPTY_MOOD); }} />
           ) : view === 'mind' ? (
             <>
-              <h2 className="headline">Tonight, what are you?</h2>
+              <h2 className="headline">What does tonight feel like?</h2>
               <div className="mut sub">{phase === 'done' ? 'Every exact match below obeys each of your answers.' : 'A few plain questions. Tap any answer below to change it.'}</div>
               <div className="freebox">
                 <input type="text" value={freeText} onChange={e => setFreeText(e.target.value)} onKeyDown={e => e.key === 'Enter' && applyFree()} placeholder="Or type it: a funny crime film, no horror…" />
@@ -443,7 +449,7 @@ export default function App() {
         </div>
       </main>
       <nav className="tabbar">
-        {NAV.map(n => <button key={n.k} className={view === n.k ? 'on' : ''} onClick={n.on}><span>{n.icon}</span>{n.label}</button>)}
+        {NAV.map(n => <button key={n.k} className={isOn(n, view) ? 'on' : ''} onClick={n.on}><span>{n.icon}</span>{n.label}</button>)}
       </nav>
       {toast && <div className="toast" key={toast.k}>{toast.msg}</div>}
     </div>

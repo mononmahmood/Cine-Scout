@@ -1,6 +1,6 @@
 // Festival prizes, awards, nominations and critic scores (Rotten Tomatoes,
 // Metacritic) from Wikidata, looked up by IMDb id. ?imdb=tt1,tt2,… (max 40)
-import { send, fetchJson } from './_lib.js';
+import { send, fetchJson, rateLimit } from './_lib.js';
 
 const FESTIVALS = ['cannes', 'palme', 'venice', 'golden lion', 'berlin', 'golden bear', 'sundance', 'toronto', 'tiff', 'locarno', 'karlovy', 'busan', 'rotterdam', 'san sebasti', 'mami', 'iffk', 'iffi', 'kerala', 'goa', 'dhaka international'];
 const MAJOR = ['academy award', 'oscar', 'bafta', 'golden globe', 'césar', 'national film award', 'filmfare', 'independent spirit', 'critics', 'european film award', 'asian film award'];
@@ -15,6 +15,7 @@ const RT = 'http://www.wikidata.org/entity/Q105584', MC = 'http://www.wikidata.o
 // ?imdb=tt1,tt2 (keys are IMDb ids) or ?tmdb=movie:603,tv:1396 (keys are those,
 // and each result also carries its IMDb id). Max 40 per call.
 export default async function handler(req, res) {
+  if (!rateLimit(req, res, { name: 'acclaim', max: 240 })) return;
   const imdb = String(req.query?.imdb || '').split(',').filter(x => /^tt\d+$/.test(x)).slice(0, 40);
   const tmdb = String(req.query?.tmdb || '').split(',').filter(x => /^(movie|tv):\d+$/.test(x)).slice(0, 40);
   if (!imdb.length && !tmdb.length) return send(res, 400, { error: 'imdb or tmdb ids required' });

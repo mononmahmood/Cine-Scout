@@ -55,6 +55,11 @@ button { font-family: inherit; }
 .nav .ico { width: 18px; text-align: center; color: var(--mut); transition: color .25s; }
 .nav button.on .ico { color: var(--gold); }
 .memo { font-size: 11px; margin: 16px 10px; }
+.privacy { font-size: 10.5px; line-height: 1.5; margin: 8px 10px 0; opacity: .8; }
+
+/* two-line human tagline for new users */
+.lede { font-size: 15px; color: #d4d4d8; line-height: 1.55; margin: 14px 0 0; max-width: 620px; }
+.intro-lede { font-size: clamp(14px, 2vw, 17px); color: #e4e4e7; text-shadow: 0 2px 12px rgba(0,0,0,.8); margin-top: 12px; }
 
 /* ---------- main ---------- */
 .main { flex: 1; min-width: 0; padding: 28px clamp(16px, 4vw, 48px) 80px; max-width: 1240px; position: relative; z-index: 2; }
@@ -460,8 +465,11 @@ details.trace { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--li
 .intro-mode .hero-grain { opacity: .045; }
 .intro-credit i { font-style: italic; color: rgba(244,244,245,.85); }
 
-/* one logo at a time: the big one over the clip hands over to the small one */
-.intro-mode .side .logo, .intro-mode .side .tag { opacity: var(--p, 0); }
+/* one logo at a time: the big one over the clip hands over to the small one.
+   First screen: the menu starts at the very top of the sidebar; scrolling in
+   reveals the logo, which pushes the menu down to its resting spot. */
+.intro-mode .side .logo { opacity: var(--p, 0); max-height: calc(var(--p, 0) * 180px); overflow: hidden; margin-bottom: calc(var(--p, 0) * 4px); }
+.intro-mode .side .tag { opacity: var(--p, 0); max-height: calc(var(--p, 0) * 40px); overflow: hidden; margin-bottom: calc(var(--p, 0) * 10px); }
 .intro-mode .mhead { opacity: clamp(0, calc((var(--p, 0) - .55) * 3), 1); }
 @media (max-width: 860px) {
   .intro-gate { inset: 14px; bottom: 92px; }

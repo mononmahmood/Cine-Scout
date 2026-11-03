@@ -287,6 +287,7 @@ export function IntroHero({ onStart }) {
       <div className="intro-copy">
         <h1 className="logo big">CINE <span className="scout">SCOUT</span></h1>
         <p className="slogan">for those who stay for the credits</p>
+        <p className="lede intro-lede">Not sure what to watch tonight?<br />Answer a few questions — we'll find films and series that fit your mood.</p>
       </div>
       <button className="intro-cue" onClick={onStart}>
         <span>Scroll to start</span>

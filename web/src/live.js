@@ -88,8 +88,16 @@ export async function acclaimByTmdb(keys) {
   return out;
 }
 
+// A fresh batch of calm trailers for the intro reel, resolved live through
+// /api/intro. Returns [] when offline — the caller falls back to the static
+// list below.
+export async function introBatch() {
+  const d = await get('/api/intro');
+  return Array.isArray(d?.clips) ? d.clips : [];
+}
+
 // Calm, painterly films for the intro, official trailers verified embeddable
-// in 1080p or better.
+// in 1080p or better. Fallback for when /api/intro is unreachable.
 // [title, year, YouTube key, TMDB backdrop, start s, length s] — each window was
 // picked by eye from the trailer's frame-by-frame storyboard to be free of
 // title cards, review quotes and logos.
@@ -124,7 +132,7 @@ const CALM = [
 
 // A short reel: n different calm films in random order, each with its
 // hand-picked text-free moment.
-export function introReel(n = 4) {
+export function introReel(n = 6) {
   return [...CALM].sort(() => Math.random() - 0.5).slice(0, n)
     .map(([title, year, key, , start, len]) => ({ key, title, year, start, len }));
 }

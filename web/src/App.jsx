@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { QUESTIONS, byId, G } from './questions.js';
 import { stateOf, visibleOptions, parseMood, EMPTY_MOOD, buildPool, nextQuestion, shouldStop, MAX_Q, recommend, nextBatch, hasMore, platformPicks, loadHistory, saveHistory, loadPrefs, savePrefs } from './engine.js';
-import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest, introReel } from './live.js';
+import { PLATFORMS, providerMap, regionSupported, trending, IMG, redditHot, criticsLatest, introReel, introBatch } from './live.js';
 
 // First screen: a reel of calm trailer moments. ?intro=0 turns it off
 // (the old poster backdrop), as does the system's reduce-motion setting.
@@ -78,7 +78,18 @@ export default function App() {
   const [heroPool, setHeroPool] = useState(() => CATALOGUE.map(t => t.poster).filter(Boolean));
   const [providers, setProviders] = useState({});
   const [regionNote, setRegionNote] = useState(null);
-  const [reel] = useState(() => (INTRO ? introReel(4) : []));
+  const [reel, setReel] = useState(() => (INTRO ? introReel(6) : []));
+  // The reel opens with a small hand-picked batch, then upgrades to a fresh
+  // live batch as soon as /api/intro answers; every exhausted batch fetches
+  // another, so the intro keeps showing new material instead of looping.
+  const loadReel = async () => {
+    try {
+      const b = await introBatch();
+      if (b.length >= 3) { setReel(b); return; }
+    } catch {}
+    setReel(introReel(6)); // offline or empty: reshuffle the hand-picked fallback
+  };
+  useEffect(() => { if (INTRO) loadReel(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useIntroScroll(INTRO);
   const startRef = useRef(null);
   const [dataRegion, setDataRegion] = useState('IN');
@@ -299,7 +310,7 @@ export default function App() {
         <div className="mut privacy">Private by design — your history, taste and dashboard stay in this browser. No account, no tracking, nothing sent home.</div>
         <div className="mut attribution">Film data from TMDB · streaming data via JustWatch · scores and prizes from Wikidata · discussion from Reddit · headlines from critics’ public feeds. This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
       </aside>
-      {INTRO ? <IntroReel clips={reel} /> : <HeroReel pool={heroPool} />}
+      {INTRO ? <IntroReel clips={reel} onExhausted={loadReel} /> : <HeroReel pool={heroPool} />}
       <main className="main">
         {(view !== 'welcome' || INTRO) && (
           <header className="mhead">

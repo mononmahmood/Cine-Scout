@@ -193,17 +193,22 @@ export function useIntroScroll(on) {
 }
 
 // One trailer moment in a muted, inline, control-less YouTube player, slowed
-// to 0.75× for a calmer feel. It is only shown while its picture is actually
-// moving: if playback time stops advancing (buffering, a stall, a pause, the
-// end screen) it fades out before YouTube can draw a spinner or play/pause icon.
+// to 0.75× for a calmer feel. Clips without a hand-picked window get a clean
+// one chosen live: the middle of the trailer only — past the distributor
+// logos (MUBI, Neon, A24…), before the title plate — so platform logos, award
+// laurels and end cards never reach the screen. It is only shown while its
+// picture is actually moving inside that window: if playback time stops
+// advancing (buffering, a stall, a pause) it fades out before YouTube can
+// draw a spinner or a play/pause button.
 const RATE = 0.75;
-function ClipFrame({ clip, visible, onPlaying, onTime }) {
+function ClipFrame({ clip, visible, onReady, onTime }) {
   const frame = useRef(null);
-  const cb = useRef({ onPlaying, onTime });
-  cb.current = { onPlaying, onTime };
+  const win = useRef(null); // { start, len } — the clean window being shown
+  const cb = useRef({ onReady, onTime });
+  cb.current = { onReady, onTime };
   const [moving, setMoving] = useState(false);
   useEffect(() => {
-    let last = -1, lastAt = 0, state = -1, slowed = false;
+    let last = -1, lastAt = 0, state = -1, slowed = false, playAt = 0, dur = 0;
     const cmd = (func, args = []) => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
     const onMsg = e => {
       if (e.source !== frame.current?.contentWindow) return; // several players can be live at once
@@ -211,18 +216,36 @@ function ClipFrame({ clip, visible, onPlaying, onTime }) {
       const info = d.info || {};
       const st = d.event === 'onStateChange' ? d.info : info.playerState;
       if (typeof st === 'number') state = st;
-      if (state === 1 && !slowed) { cmd('setPlaybackRate', [RATE]); cmd('mute'); slowed = true; }
+      if (typeof info.duration === 'number' && info.duration > 0) dur = info.duration;
+      if (!dur && info.videoData?.length_seconds) dur = +info.videoData.length_seconds;
+      if (state === 1 && !slowed) { cmd('setPlaybackRate', [RATE]); cmd('mute'); slowed = true; playAt = Date.now(); }
+      // choose the clean window once the trailer's real length is known (or,
+      // if the player never reports it, after 3 s on a typical-length guess)
+      if (state === 1 && slowed && !win.current) {
+        let w = null;
+        if (clip.start != null) w = { start: clip.start, len: clip.len }; // hand-picked: trusted as-is
+        else if (dur >= 45) {
+          const len = Math.min(12, Math.max(8, Math.round(dur * 0.12)));
+          w = { start: Math.round((dur * 0.3 + Math.random() * Math.max(4, dur * 0.4 - len)) * 10) / 10, len };
+        } else if (dur >= 25) w = { start: Math.round(dur * 0.35 * 10) / 10, len: Math.min(8, Math.round(dur * 0.25)) };
+        else if (Date.now() - playAt > 3000) w = { start: 42, len: 9 }; // length unknown: middle of a typical trailer
+        if (w) {
+          win.current = w;
+          cmd('seekTo', [w.start, true]);
+          cb.current.onReady(w);
+        }
+      }
       if (typeof info.currentTime === 'number') {
         if (info.currentTime > last + 0.01) { last = info.currentTime; lastAt = Date.now(); }
-        cb.current.onTime(info.currentTime - clip.start);
+        const w = win.current;
+        // nothing is reported until playback is actually inside the window,
+        // so pre-seek frames (the opening logos) can never show
+        cb.current.onTime(w && info.currentTime >= w.start - 0.3 ? info.currentTime - w.start : null);
       }
     };
-    // watchdog: visible only while state is "playing" and time moved in the last 0.7 s
-    const dog = setInterval(() => {
-      const ok = state === 1 && Date.now() - lastAt < 700 && !document.hidden;
-      setMoving(ok);
-      if (ok) cb.current.onPlaying();
-    }, 150);
+    // watchdog: visible only while state is "playing", time moved in the last
+    // 0.7 s, and the clean window has actually started
+    const dog = setInterval(() => setMoving(state === 1 && Date.now() - lastAt < 700 && !document.hidden && win.current != null), 150);
     window.addEventListener('message', onMsg);
     return () => { window.removeEventListener('message', onMsg); clearInterval(dog); };
   }, [clip]);
@@ -233,35 +256,57 @@ function ClipFrame({ clip, visible, onPlaying, onTime }) {
     w.postMessage(JSON.stringify({ event: 'command', func: 'addEventListener', args: ['onStateChange'] }), '*');
     w.postMessage(JSON.stringify({ event: 'command', func: 'unloadModule', args: ['captions'] }), '*');
   };
-  const src = `https://www.youtube-nocookie.com/embed/${clip.key}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&disablekb=1&fs=0&cc_load_policy=0&hl=en&start=${clip.start}&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
+  const src = `https://www.youtube-nocookie.com/embed/${clip.key}?autoplay=1&mute=1&controls=0&playsinline=1&rel=0&iv_load_policy=3&disablekb=1&fs=0&cc_load_policy=0&hl=en&enablejsapi=1&origin=${encodeURIComponent(location.origin)}`;
   return <iframe ref={frame} className={`intro-video ${visible && moving ? 'on' : ''}`} src={src} title="" allow="autoplay; encrypted-media" tabIndex={-1} onLoad={onLoad} />;
 }
 
-// A reel of calm trailer moments. Each plays its hand-picked window once (at
-// 0.75×), the next one starts loading in a hidden player ~5 s before the end,
-// then the two crossfade slowly. No poster is ever shown.
-export function IntroReel({ clips }) {
-  const [slots, setSlots] = useState([]); // { n, i, ready }
+// A reel of calm trailer moments, each playing its clean window once (at
+// 0.75×). The next clip loads in a hidden player ~5 s before the window ends,
+// then the two crossfade slowly; no poster is ever shown. When the batch runs
+// out, onExhausted asks for a fresh one — the reel keeps rotating with new
+// material instead of looping the same few clips.
+export function IntroReel({ clips, onExhausted }) {
+  const [slots, setSlots] = useState([]); // { n, i, ready, win }
   const [active, setActive] = useState(0);
+  const cycled = useRef(false);
+  const timers = useRef({});
   useEffect(() => {
     if (!clips?.length) return;
-    setSlots([{ n: 0, i: 0, ready: false }]); setActive(0);
+    cycled.current = false;
+    Object.values(timers.current).forEach(clearTimeout); timers.current = {};
+    setSlots([{ n: 0, i: 0, ready: false, win: null }]); setActive(0);
   }, [clips]);
-  const live = useRef({ slots: [], active: 0 });
-  live.current = { slots, active };
-  const ready = n => { if (!live.current.slots.find(x => x.n === n)?.ready) setSlots(s => s.map(x => (x.n === n ? { ...x, ready: true } : x))); };
+  const live = useRef({ slots: [], active: 0, clips: [] });
+  live.current = { slots, active, clips };
+  const clearTimer = n => { if (timers.current[n]) { clearTimeout(timers.current[n]); delete timers.current[n]; } };
+  const advance = slot => {
+    const { slots: s, clips: cs } = live.current;
+    clearTimer(slot.n);
+    const nextN = slot.n + 1, last = slot.i >= cs.length - 1;
+    if (!s.find(x => x.n === nextN) && !last) setSlots(cur => [...cur, { n: nextN, i: slot.i + 1, ready: false, win: null }]);
+    live.current.active = nextN; setActive(nextN);
+    setTimeout(() => setSlots(cur => cur.filter(x => x.n !== slot.n)), 2600);
+    if (last && !cycled.current) { cycled.current = true; onExhausted?.(); }
+  };
+  const ready = (n, win) => {
+    if (live.current.slots.find(x => x.n === n)?.ready) return;
+    setSlots(s => s.map(x => (x.n === n ? { ...x, ready: true, win } : x)));
+    // safety net: a clip that never actually plays its window is left after 8 s
+    clearTimer(n);
+    timers.current[n] = setTimeout(() => {
+      const s = live.current.slots.find(x => x.n === n);
+      if (live.current.active === n && s) advance(s);
+    }, 8000);
+  };
   const onTime = (slot, t) => {
-    const { slots: s, active: a } = live.current;
-    if (slot.n !== a || !clips?.length) return;
-    const len = clips[slot.i].len;
+    const { slots: s, active: a, clips: cs } = live.current;
+    if (slot.n !== a || !cs?.length || t == null) return;
+    const w = slot.win; if (!w) return;
     const next = s.find(x => x.n === slot.n + 1);
-    if (t >= len - 5 && !next) { setSlots([...s, { n: slot.n + 1, i: (slot.i + 1) % clips.length, ready: false }]); return; }
+    const last = slot.i >= cs.length - 1;
+    if (t >= w.len - 5 && !next && !last) { setSlots([...s, { n: slot.n + 1, i: slot.i + 1, ready: false, win: null }]); return; }
     // hand over at the end of the window; if the next one isn't moving yet, wait up to 4 s more
-    if (next && ((t >= len && next.ready) || t >= len + 4)) {
-      live.current.active = next.n;
-      setActive(next.n);
-      setTimeout(() => setSlots(cur => cur.filter(x => x.n !== slot.n)), 2600);
-    }
+    if (next && ((t >= w.len && next.ready) || t >= w.len + 4)) advance(slot);
   };
   const cur = slots.find(x => x.n === active);
   const clip = cur && clips[cur.i];
@@ -269,7 +314,7 @@ export function IntroReel({ clips }) {
     <div className="intro-bg" aria-hidden="true">
       <div className="intro-drift">
         {!REDUCED && slots.map(x => (
-          <ClipFrame key={x.n} clip={clips[x.i]} visible={x.n === active} onPlaying={() => ready(x.n)} onTime={t => onTime(x, t)} />
+          <ClipFrame key={x.n} clip={clips[x.i]} visible={x.n === active} onReady={win => ready(x.n, win)} onTime={t => onTime(x, t)} />
         ))}
       </div>
       <div className="intro-leak" />

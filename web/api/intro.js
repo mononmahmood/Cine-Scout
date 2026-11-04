@@ -29,6 +29,22 @@ const CALM = [
   ['A Ghost Story', 2017], ['First Cow', 2019], ['Petite Maman', 2021],
   ['Parasite', 2019], ['Masaan', 2015], ['The Disciple', 2020], ['Aligarh', 2016],
   ['Kumbalangi Nights', 2019], ['Charulata', 1964], ['Mahanagar', 1963], ['Aparajito', 1956],
+  // world cinema and classics
+  ['Stalker', 1979], ['Solaris', 1972], ['La Dolce Vita', 1960], ['Cinema Paradiso', 1988],
+  ['Wings of Desire', 1987], ['Three Colors: Blue', 1993], ['The Double Life of Véronique', 1991],
+  ['The Lives of Others', 2006], ['Good Bye Lenin!', 2003], ['Phoenix', 2014], ['Amour', 2012],
+  ['A Separation', 2011], ['The Salesman', 2016], ['Capernaum', 2018], ['Wadjda', 2012],
+  ['I, Daniel Blake', 2016], ['Happy-Go-Lucky', 2008], ['An Education', 2009],
+  ['Frances Ha', 2012], ['20th Century Women', 2016], ['The Rider', 2017], ['Wildlife', 2018],
+  ['The Station Agent', 2003], ['Lars and the Real Girl', 2007], ['Sound of Metal', 2019],
+  ['Minari', 2020], ['CODA', 2021], ['Belfast', 2021], ['Living', 2022],
+  ['A Man Called Ove', 2015], ['Our Little Sister', 2015], ['Still Walking', 2008],
+  ['Nobody Knows', 2004], ['Like Father, Like Son', 2013],
+  // more India and Bengal
+  ['Piku', 2015], ['October', 2018], ['Kapoor & Sons', 2016], ['Dil Chahta Hai', 2001],
+  ['Udaan', 2010], ['Barfi!', 2012], ['Laapataa Ladies', 2024],
+  ['Sonar Kella', 1974], ['Joy Baba Felunath', 1979], ['Devi', 1960],
+  ['Kanchenjungha', 1962], ['Ashani Sanket', 1973],
 ];
 
 const DAY = 864e5;
@@ -66,8 +82,8 @@ export default async function handler(req, res) {
   if (!rateLimit(req, res, { name: 'intro', max: 60 })) return;
   if (!process.env.TMDB_TOKEN && !process.env.TMDB_API_KEY) return send(res, 503, { error: 'TMDB key not configured' });
   // resolve a wide random draw; usually about a dozen come back with trailers
-  const draw = [...CALM].sort(() => Math.random() - 0.5).slice(0, 18);
+  const draw = [...CALM].sort(() => Math.random() - 0.5).slice(0, 24);
   const keys = await Promise.all(draw.map(([t, y]) => trailerFor(t, y)));
-  const clips = draw.map(([title, year], i) => (keys[i] ? { key: keys[i], title, year } : null)).filter(Boolean).slice(0, 12);
+  const clips = draw.map(([title, year], i) => (keys[i] ? { key: keys[i], title, year } : null)).filter(Boolean).slice(0, 16);
   send(res, 200, { clips }, 600);
 }

@@ -7,14 +7,21 @@ const FEEDS = [
   { name: 'RogerEbert.com', url: 'https://www.rogerebert.com/feed', kind: 'critic' },
   { name: 'The Guardian Film', url: 'https://www.theguardian.com/film/rss', kind: 'critic' },
   { name: 'Slant', url: 'https://www.slantmagazine.com/feed/', kind: 'critic' },
+  { name: 'The Film Stage', url: 'https://thefilmstage.com/feed/', kind: 'critic' },
+  { name: 'Little White Lies', url: 'https://lwlies.com/feed/', kind: 'critic' },
   { name: 'IndieWire', url: 'https://www.indiewire.com/feed/', kind: 'press' },
   { name: 'Variety Film', url: 'https://variety.com/v/film/feed/', kind: 'press' },
   { name: 'Deadline Film', url: 'https://deadline.com/v/film/feed/', kind: 'festival' },
   { name: 'Hollywood Reporter Reviews', url: 'https://www.hollywoodreporter.com/c/movies/movie-reviews/feed/', kind: 'critic' },
+  { name: 'The A.V. Club', url: 'https://www.avclub.com/feed/rss', kind: 'press' },
   { name: 'Letterboxd Journal', url: 'https://letterboxd.com/journal/rss/', kind: 'cinephile' },
   { name: 'NDTV Movies', url: 'https://feeds.feedburner.com/ndtvmovies-latest', kind: 'india' },
   { name: 'Cinema Express', url: 'https://www.cinemaexpress.com/feed', kind: 'india' },
+  { name: 'Indian Express', url: 'https://indianexpress.com/section/entertainment/feed/', kind: 'india' },
+  { name: 'Hindustan Times', url: 'https://www.hindustantimes.com/feeds/rss/entertainment/bollywood/rssfeed.xml', kind: 'india' },
+  { name: 'Scroll.in', url: 'https://feeds.feedburner.com/ScrollinArticles.rss', kind: 'india' },
   { name: 'The Daily Star · Film', url: 'https://www.thedailystar.net/entertainment/tv-film/rss.xml', kind: 'bangladesh' },
+  { name: 'Prothom Alo', url: 'https://en.prothomalo.com/feed', kind: 'bangladesh' },
 ];
 
 const strip = s => (s || '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/<[^>]+>/g, ' ')

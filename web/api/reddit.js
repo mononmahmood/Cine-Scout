@@ -3,7 +3,7 @@
 // REDDIT_CLIENT_SECRET are set; otherwise the public Arctic Shift archive.
 import { send, fetchJson, mentions, rateLimit, cleanQuery, cleanYear } from './_lib.js';
 
-const SUBS = ['movies', 'TrueFilm', 'criterion', 'flicks', 'MovieSuggestions', 'television', 'bollywood', 'tollywood', 'kollywood', 'IndianCinema', 'bangladesh'];
+const SUBS = ['movies', 'TrueFilm', 'criterion', 'flicks', 'MovieSuggestions', 'television', 'bollywood', 'tollywood', 'kollywood', 'IndianCinema', 'MalayalamMovies', 'bangladesh', 'Cinephiles', 'classicfilms', 'foreignfilm', 'Letterboxd'];
 const UA = 'web:cine-scout:1.0 (by /u/cinescout-app)';
 let cached = { token: null, until: 0 };
 

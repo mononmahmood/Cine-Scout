@@ -310,7 +310,11 @@ export default function App() {
         <div className="mut privacy">Private by design — your history, taste and dashboard stay in this browser. No account, no tracking, nothing sent home.</div>
         <div className="mut attribution">Film data from TMDB · streaming data via JustWatch · scores and prizes from Wikidata · discussion from Reddit · headlines from critics’ public feeds. This product uses the TMDB API but is not endorsed or certified by TMDB.</div>
       </aside>
-      {INTRO ? <IntroReel clips={reel} onExhausted={loadReel} /> : <HeroReel pool={heroPool} />}
+      {/* the poster reel always runs underneath the trailer reel — if video
+          playback is blocked (phone Low Power / Data Saver mode) the first
+          screen stays alive instead of going black */}
+      <HeroReel pool={heroPool} />
+      {INTRO && <IntroReel clips={reel} onExhausted={loadReel} />}
       <main className="main">
         {(view !== 'welcome' || INTRO) && (
           <header className="mhead">

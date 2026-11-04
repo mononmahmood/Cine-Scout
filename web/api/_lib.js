@@ -3,6 +3,9 @@
 
 export function send(res, status, body, maxAge = 3600) {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  // our JSON must never be embedded or sniffed by another origin
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
   if (status === 200) res.setHeader('Cache-Control', `public, s-maxage=${maxAge}, stale-while-revalidate=${maxAge * 4}`);
   else res.setHeader('Cache-Control', 'no-store');
   res.status(status).send(JSON.stringify(body));

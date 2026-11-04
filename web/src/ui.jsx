@@ -207,10 +207,18 @@ function ClipFrame({ clip, visible, onReady, onTime }) {
   const cb = useRef({ onReady, onTime });
   cb.current = { onReady, onTime };
   const [moving, setMoving] = useState(false);
+  // freeze the clip the moment it is no longer the one on screen — a paused
+  // player can draw YouTube's big play button, so this runs only while hidden
   useEffect(() => {
-    let last = -1, lastAt = 0, state = -1, slowed = false, playAt = 0, dur = 0;
+    if (visible) return;
+    try { frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'); } catch {}
+  }, [visible]);
+  useEffect(() => {
+    let last = -1, lastAt = 0, state = -1, slowed = false, playAt = 0, dur = 0, ct = -1;
     const cmd = (func, args = []) => frame.current?.contentWindow?.postMessage(JSON.stringify({ event: 'command', func, args }), '*');
     const onMsg = e => {
+      // player messages only: both the source frame and the origin must match
+      if (e.origin !== 'https://www.youtube-nocookie.com' && e.origin !== 'https://www.youtube.com') return;
       if (e.source !== frame.current?.contentWindow) return; // several players can be live at once
       let d; try { d = JSON.parse(e.data); } catch { return; }
       const info = d.info || {};
@@ -220,15 +228,17 @@ function ClipFrame({ clip, visible, onReady, onTime }) {
       if (!dur && info.videoData?.length_seconds) dur = +info.videoData.length_seconds;
       if (state === 1 && !slowed) { cmd('setPlaybackRate', [RATE]); cmd('mute'); slowed = true; playAt = Date.now(); }
       // choose the clean window once the trailer's real length is known (or,
-      // if the player never reports it, after 3 s on a typical-length guess)
+      // if the player never reports it, after 3 s on a typical-length guess).
+      // The 30–55 % band skips the cold open (distributor logos) and the
+      // back half (title cards, laurels, end plates) of typical trailers.
       if (state === 1 && slowed && !win.current) {
         let w = null;
         if (clip.start != null) w = { start: clip.start, len: clip.len }; // hand-picked: trusted as-is
         else if (dur >= 45) {
-          const len = Math.min(12, Math.max(8, Math.round(dur * 0.12)));
-          w = { start: Math.round((dur * 0.3 + Math.random() * Math.max(4, dur * 0.4 - len)) * 10) / 10, len };
-        } else if (dur >= 25) w = { start: Math.round(dur * 0.35 * 10) / 10, len: Math.min(8, Math.round(dur * 0.25)) };
-        else if (Date.now() - playAt > 3000) w = { start: 42, len: 9 }; // length unknown: middle of a typical trailer
+          const len = Math.min(10, Math.max(7, Math.round(dur * 0.1)));
+          w = { start: Math.round((dur * 0.3 + Math.random() * Math.max(4, dur * 0.25 - len)) * 10) / 10, len };
+        } else if (dur >= 25) w = { start: Math.round(dur * 0.35 * 10) / 10, len: Math.min(7, Math.round(dur * 0.22)) };
+        else if (Date.now() - playAt > 3000) w = { start: 42, len: 8 }; // length unknown: middle of a typical trailer
         if (w) {
           win.current = w;
           cmd('seekTo', [w.start, true]);
@@ -237,15 +247,22 @@ function ClipFrame({ clip, visible, onReady, onTime }) {
       }
       if (typeof info.currentTime === 'number') {
         if (info.currentTime > last + 0.01) { last = info.currentTime; lastAt = Date.now(); }
+        ct = info.currentTime;
         const w = win.current;
         // nothing is reported until playback is actually inside the window,
         // so pre-seek frames (the opening logos) can never show
         cb.current.onTime(w && info.currentTime >= w.start - 0.3 ? info.currentTime - w.start : null);
       }
     };
-    // watchdog: visible only while state is "playing", time moved in the last
-    // 0.7 s, and the clean window has actually started
-    const dog = setInterval(() => setMoving(state === 1 && Date.now() - lastAt < 700 && !document.hidden && win.current != null), 150);
+    // watchdog: visible only while the player is "playing", time moved in the
+    // last 0.7 s, and the picture is strictly inside the clean window — the
+    // moment any of those slip (buffer, pause, seek, window end) it hides,
+    // taking YouTube's pause/play chrome with it
+    const dog = setInterval(() => {
+      const w = win.current;
+      setMoving(state === 1 && Date.now() - lastAt < 700 && !document.hidden && w != null
+        && ct >= w.start - 0.35 && ct <= w.start + w.len + 0.2);
+    }, 150);
     window.addEventListener('message', onMsg);
     return () => { window.removeEventListener('message', onMsg); clearInterval(dog); };
   }, [clip]);
@@ -268,11 +285,14 @@ function ClipFrame({ clip, visible, onReady, onTime }) {
 export function IntroReel({ clips, onExhausted }) {
   const [slots, setSlots] = useState([]); // { n, i, ready, win }
   const [active, setActive] = useState(0);
+  const [dead, setDead] = useState(false); // playback blocked (Low Power Mode, Data Saver…)
   const cycled = useRef(false);
+  const fails = useRef(0);
   const timers = useRef({});
   useEffect(() => {
     if (!clips?.length) return;
     cycled.current = false;
+    fails.current = 0; setDead(false);
     Object.values(timers.current).forEach(clearTimeout); timers.current = {};
     setSlots([{ n: 0, i: 0, ready: false, win: null }]); setActive(0);
   }, [clips]);
@@ -291,16 +311,22 @@ export function IntroReel({ clips, onExhausted }) {
   const ready = (n, win) => {
     if (live.current.slots.find(x => x.n === n)?.ready) return;
     setSlots(s => s.map(x => (x.n === n ? { ...x, ready: true, win } : x)));
-    // safety net: a clip that never actually plays its window is left after 8 s
+    // safety net: a clip that never actually plays its window is left after 8 s;
+    // two dead clips in a row means playback is blocked on this device — stand
+    // down and let the poster reel show instead
     clearTimer(n);
     timers.current[n] = setTimeout(() => {
       const s = live.current.slots.find(x => x.n === n);
-      if (live.current.active === n && s) advance(s);
+      if (live.current.active !== n || !s) return;
+      fails.current++;
+      if (fails.current >= 2) setDead(true);
+      else advance(s);
     }, 8000);
   };
   const onTime = (slot, t) => {
     const { slots: s, active: a, clips: cs } = live.current;
     if (slot.n !== a || !cs?.length || t == null) return;
+    fails.current = 0; // this clip is genuinely playing
     const w = slot.win; if (!w) return;
     const next = s.find(x => x.n === slot.n + 1);
     const last = slot.i >= cs.length - 1;
@@ -313,15 +339,17 @@ export function IntroReel({ clips, onExhausted }) {
   return (
     <div className="intro-bg" aria-hidden="true">
       <div className="intro-drift">
-        {!REDUCED && slots.map(x => (
+        {!REDUCED && !dead && slots.map(x => (
           <ClipFrame key={x.n} clip={clips[x.i]} visible={x.n === active} onReady={win => ready(x.n, win)} onTime={t => onTime(x, t)} />
         ))}
       </div>
-      <div className="intro-leak" />
-      <div className="intro-shade" />
-      <div className="intro-gate"><i /><i /><i /><i /></div>
+      {!dead && <>
+        <div className="intro-leak" />
+        <div className="intro-shade" />
+        <div className="intro-gate"><i /><i /><i /><i /></div>
+        {clip && <div className="intro-credit" key={clip.key}>Now showing · <i>{clip.title}</i> ({clip.year}) · official trailer</div>}
+      </>}
       <div className="hero-grain" />
-      {clip && <div className="intro-credit" key={clip.key}>Now showing · <i>{clip.title}</i> ({clip.year}) · official trailer</div>}
     </div>
   );
 }

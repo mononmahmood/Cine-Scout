@@ -11,7 +11,7 @@ final class HistoryTracker: ObservableObject {
 
     init() {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let app = dir.appendingPathComponent("Musepark", isDirectory: true)
+        let app = dir.appendingPathComponent("CineScout", isDirectory: true)
         try? FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
         self.file = app.appendingPathComponent("history.json")
         load()
@@ -32,7 +32,7 @@ final class HistoryTracker: ObservableObject {
         let d = Dump(seen: Array(seen), rejected: Array(rejected), liked: Array(liked))
         if let data = try? JSONEncoder().encode(d) { try? data.write(to: file) }
         // Mirror to UserDefaults for fast launch
-        UserDefaults.standard.set(Array(seen), forKey: "musepark.seen")
+        UserDefaults.standard.set(Array(seen), forKey: "cinescout.seen")
     }
 
     private func load() {
@@ -40,7 +40,7 @@ final class HistoryTracker: ObservableObject {
            let d = try? JSONDecoder().decode(Dump.self, from: data) {
             seen = Set(d.seen); rejected = Set(d.rejected); liked = Set(d.liked)
         } else {
-            seen = Set(UserDefaults.standard.stringArray(forKey: "musepark.seen") ?? [])
+            seen = Set(UserDefaults.standard.stringArray(forKey: "cinescout.seen") ?? [])
         }
     }
 }

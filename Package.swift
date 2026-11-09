@@ -2,15 +2,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "Musepark",
+    name: "CineScout",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Musepark", targets: ["Musepark"])
+        .executable(name: "CineScout", targets: ["CineScout"])
     ],
     targets: [
         .executableTarget(
-            name: "Musepark",
-            path: "Sources/Musepark"
+            name: "CineScout",
+            path: "Sources/CineScout"
         )
     ]
 )

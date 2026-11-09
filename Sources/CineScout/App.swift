@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MuseparkApp: App {
+struct CineScoutApp: App {
     @StateObject private var appState = AppState()
     var body: some Scene {
         WindowGroup {
@@ -71,7 +71,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .navigationTitle("Musepark 1.3")
+        .navigationTitle("Cine Scout 1.3")
         .safeAreaInset(edge: .bottom) {
             Text(state.history.seen.count + state.history.rejected.count == 0
                  ? "No history yet"
